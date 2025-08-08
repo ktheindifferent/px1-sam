@@ -178,6 +178,40 @@ Rustation-NG is a PlayStation 1 emulator written entirely in Rust, designed as a
 - Capture buffers for recording
 - Register-based control (320 16-bit registers)
 
+## Geometry Transformation Engine (GTE)
+
+### GTE Overview
+- **Purpose**: Coprocessor 2 for 3D graphics transformations
+- **Architecture**: Fixed-point arithmetic unit
+- **Integration**: Works concurrently with main CPU
+
+### GTE Components
+- **Matrices**: Three 3x3 signed 4.12 matrices (rotation, light, color)
+- **Control Vectors**: Four 3x signed word vectors (translation, background color, far color, zero)
+- **Registers**:
+  - Screen offsets (OFX, OFY): 16.16 fixed-point
+  - Projection plane distance (H)
+  - Depth cueing coefficients (DQA, DQB)
+  - Z-averaging scale factors (ZSF3, ZSF4)
+- **FIFOs**:
+  - XY FIFO: 4 entries for screen coordinates
+  - Z FIFO: 4 entries for depth values
+  - RGB FIFO: 3 entries for color values
+
+### GTE Operations
+- **3D Transformations**: RTPS (single), RTPT (triple) perspective transforms
+- **Lighting**: NCS, NCT, NCDS, NCDT, NCCS, NCCT commands
+- **Clipping**: NCLIP for backface culling
+- **Interpolation**: INTPL, DPCS for color interpolation
+- **Matrix Operations**: MVMVA for matrix-vector multiplication
+- **Special Functions**: SQR (square), AVSZ3/4 (Z-averaging)
+
+### GTE Features
+- **Overflow Handling**: Comprehensive flag system for overflow detection
+- **Performance**: Optional overclocking mode to prevent CPU stalls
+- **Precision**: Fixed-point arithmetic for deterministic results
+- **Pipeline**: Can run concurrently with CPU operations
+
 ## Documentation Progress
 
 ### Completed Tasks
@@ -186,25 +220,246 @@ Rustation-NG is a PlayStation 1 emulator written entirely in Rust, designed as a
 - ✅ BIOS handling and compatibility analysis
 - ✅ CD controller firmware and implementation
 - ✅ SPU audio system documentation
+- ✅ GTE 3D transformation engine analysis
+- ✅ DMA controller and memory card support
+- ✅ GPU rasterization and command processing
+- ✅ Input device and gamepad handling
+- ✅ Debugger interface (GDB support)
+- ✅ Libretro integration layer
+- ✅ Error handling and logging system
+- ✅ Build system and cross-platform support
+- ✅ Performance optimization opportunities identified
+- ✅ Testing strategy documentation
 
-### Pending Analysis
-- GTE 3D processing
-- DMA controller operations
-- GPU command processing and rasterization
-- Input device handling
-- Debugger interface
-- Error handling patterns
-- Build system details
-- Testing strategies
-- Performance optimization opportunities
+## DMA Controller
 
-## Next Steps
-1. Deep dive into CPU architecture and instruction set
-2. Document memory mapping and management
-3. Analyze BIOS loading and validation process
-4. Review CD controller firmware requirements
-5. Profile performance bottlenecks
-6. Identify areas for improvement
+### DMA Architecture
+- **Channels**: 7 independent DMA channels
+- **Ports**: MDecIn, MDecOut, GPU, CD-ROM, SPU, PIO, OTC
+- **Control**: Per-channel and global control registers
+- **IRQ**: Configurable interrupt generation per channel
+
+### DMA Features
+- **Transfer Modes**: Block and linked-list transfers
+- **CPU Interaction**: CPU stalls during active DMA
+- **Synchronization**: Cycle-accurate timing with refresh periods
+- **Priority**: Channel priority management
+- **Direction**: Configurable transfer direction per channel
+
+### DMA Implementation
+- Base address and block control per channel
+- Period counter for refresh cycles
+- IRQ configuration with per-channel flags
+- Integration with GPU, SPU, MDEC, CD subsystems
+
+## Input/Memory Card System
+
+### Controller Architecture
+- **Serial Interface**: SPI-like serial communication
+- **Baud Rate**: Configurable clock divider
+- **Ports**: 2 controller ports, 2 memory card slots
+- **Protocol**: Command/response serial protocol
+
+### Supported Devices
+- **Gamepads**: Digital controller emulation
+- **Memory Cards**: Save data persistence
+- **Multitap**: Protocol-level support (not hardware pins)
+
+### Features
+- **DSR Interrupt**: Data Set Ready signal handling
+- **TX/RX Control**: Separate transmit/receive enables
+- **FIFO**: Response byte buffering
+- **Select Signal**: Per-port device selection
+- **Transfer State Machine**: Manages serial communication
+
+### Implementation Details
+- Peripheral abstraction for different device types
+- DSR state tracking per device
+- Interrupt generation on DSR pulse
+- Configurable serial mode and timing
+
+## GPU Rasterization and Command Processing
+
+### GPU Rasterizer Architecture
+- **Multi-threading**: Separate rasterizer thread for performance
+- **Communication**: Channel-based command/frame exchange
+- **Command Buffer**: Batched command processing
+- **Frame Pipeline**: Asynchronous frame rendering
+
+### GPU Commands (GP0/GP1)
+- **Drawing Primitives**:
+  - Lines, triangles, rectangles
+  - Textured and non-textured variants
+  - Shaded and flat colored
+- **Rendering Modes**:
+  - Transparency (opaque/transparent)
+  - Texture modes (raw/blended)
+  - Shading modes (flat/gouraud)
+- **VRAM Operations**:
+  - Direct VRAM read/write
+  - Image transfers
+  - Clear operations
+
+### Rasterizer Features
+- **Fixed-point arithmetic**: Deterministic rendering
+- **Pixel formats**: 15-bit and 24-bit color support
+- **Clipping**: Hardware clipping area support
+- **Texture mapping**: UV coordinate mapping
+- **Dithering**: Optional dithering support
+- **Interlacing**: Field-based rendering for interlaced output
+
+### Command Processing
+- **FIFO Management**: Command queue with overflow handling
+- **Timing Simulation**: Accurate command execution timing
+- **State Machine**: Drawing state management
+- **Synchronization**: Line-by-line and frame synchronization
+
+### Performance Optimizations
+- **Thread Separation**: GPU runs independently from CPU
+- **Command Batching**: Reduces thread communication overhead
+- **Lazy Frame Generation**: Only renders when needed
+- **Serialization Support**: State save/load capability
+
+## Debugger Interface
+
+### GDB Remote Protocol
+- **Network**: TCP socket on port 9001 (127.0.0.1)
+- **Protocol**: GDB remote serial protocol
+- **Features**: Full debugging support via standard GDB client
+
+### Debugging Features
+- **Breakpoints**: Instruction-level breakpoint support
+- **Watchpoints**: Read/write memory watchpoints
+- **Single-stepping**: Step-by-step execution
+- **Memory inspection**: Read/write memory remotely
+- **Register access**: View and modify CPU registers
+- **BIOS call logging**: Optional BIOS function call tracing
+
+### Implementation
+- TCP listener for remote connections
+- State management (resume/pause/step)
+- Breakpoint and watchpoint vectors
+- Integration with CPU execution loop
+- Optional feature (compile with `debugger` feature flag)
+
+## Libretro Integration
+
+### Core Interface
+- **Context trait**: Abstraction for emulator state
+- **Callbacks**: Environment, video, audio, input functions
+- **System info**: Library metadata and capabilities
+- **Game management**: Load, reset, save states
+
+### Features
+- **Save states**: Serialization/deserialization support
+- **Variable refresh**: Dynamic configuration updates
+- **Controller configuration**: Multiple controller types
+- **Disc control**: Multi-disc support with hot-swapping
+- **OpenGL context**: Hardware rendering support
+
+### Audio/Video
+- **Video**: Frame rendering with configurable geometry
+- **Audio**: Sample-based and batch audio output
+- **Timing**: FPS and sample rate configuration
+- **Aspect ratio**: Configurable display aspect
+
+### Input Handling
+- **Polling**: Frame-based input polling
+- **State queries**: Per-port device state
+- **Rumble**: Force feedback support
+- **Device types**: Various controller configurations
+
+## Error Handling and Logging
+
+### Error System
+- **Result type**: Custom `Result<T, PsxError>` throughout
+- **Error enum**: Comprehensive error categorization
+- **Propagation**: Error bubbling with `?` operator
+
+### Logging
+- **Log crate**: Standard Rust logging facade
+- **Levels**: Debug, Info, Warn, Error
+- **Context**: Component-specific logging prefixes
+- **Retrolog**: Custom logging for libretro frontend
+
+## Build System
+
+### Cargo Configuration
+- **Edition**: Rust 2018
+- **Profiles**: Optimized debug and release builds
+- **Features**: Optional debugger and CDC verbose logging
+- **Library type**: Dynamic library (`dylib`)
+
+### Optimization Settings
+- **Debug**: Level 3 optimizations even in debug
+- **Release**: LTO, single codegen unit, no panic unwinding
+- **Incremental**: Enabled for debug, disabled for release
+
+## Testing Strategy
+
+### Current Testing
+- **Unit tests**: GTE module has comprehensive tests
+- **Integration**: Basic integration testing
+- **Manual testing**: Game compatibility testing
+
+### Recommended Improvements
+1. **Expand unit tests**: Cover more modules
+2. **Automated testing**: CI/CD pipeline integration
+3. **Regression tests**: Known game compatibility
+4. **Performance benchmarks**: Track performance metrics
+5. **Fuzzing**: Input validation testing
+
+## Performance Optimization Opportunities
+
+### Identified Areas
+1. **GTE overclocking**: Optional mode to prevent CPU stalls
+2. **Multi-threading**: GPU already separated, consider more
+3. **Command batching**: Reduce thread communication overhead
+4. **Cache optimization**: Better instruction cache utilization
+5. **DMA improvements**: Optimize transfer scheduling
+
+### Profiling Targets
+- CPU instruction decode/execute loop
+- GPU rasterization hot paths
+- Memory access patterns
+- Thread synchronization points
+- Audio mixing and resampling
+
+## Project Summary
+
+This comprehensive documentation covers all major components of the Rustation-NG PlayStation emulator:
+
+### ✅ Core Systems Documented
+- CPU (MIPS R3000A) with instruction cache and pipeline
+- GPU with software rasterizer and multi-threading
+- SPU with 24 voice channels and effects
+- GTE for 3D transformations
+- DMA controller with 7 channels
+- CD-ROM with low-level CDC emulation
+- Input/Memory card system
+- BIOS management with region support
+
+### ✅ Infrastructure Documented
+- Libretro integration for frontend compatibility
+- GDB debugger interface for development
+- Error handling and logging systems
+- Build configuration and optimization
+- Testing strategies and recommendations
+
+### 🎯 Key Strengths
+- Pure Rust implementation for safety
+- Well-documented, readable codebase
+- Cycle-accurate timing simulation
+- Multi-threaded architecture for performance
+- Comprehensive debugging support
+
+### 🔧 Areas for Improvement
+- Expand unit test coverage
+- Add more disc format support (CHD)
+- Support additional CDC firmware versions
+- Implement more performance optimizations
+- Add automated testing pipeline
 
 ---
 *Last Updated: 2025-08-08*
+*Documentation Complete: All 15 tasks finished successfully*
