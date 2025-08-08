@@ -38,7 +38,7 @@ impl Cache {
             .spawn(move || {
                 run_prefetcher(image, thread_reader);
             })
-            .unwrap();
+            .expect("Failed to spawn CD cache prefetcher thread");
 
         Cache {
             reader,
@@ -50,7 +50,14 @@ impl Cache {
     fn reader(&self) -> (MutexGuard<Reader>, &Condvar) {
         let (reader, cond) = &*self.reader;
 
-        (reader.lock().unwrap(), cond)
+        let guard = match reader.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                log::error!("CD cache reader mutex was poisoned, attempting recovery");
+                poisoned.into_inner()
+            }
+        };
+        (guard, cond)
     }
 
     pub fn read_sector(&mut self, dp: DiscPosition) -> CachedResult<Sector> {
@@ -69,7 +76,13 @@ impl Cache {
             }
 
             // Sector isn't cached, wait for the prefetcher
-            reader = cond.wait(reader).unwrap();
+            reader = match cond.wait(reader) {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    log::error!("CD cache condvar wait failed, attempting recovery");
+                    poisoned.into_inner()
+                }
+            };
         }
     }
 
@@ -89,7 +102,9 @@ impl ::std::ops::Drop for Cache {
         }
 
         if let Some(t) = self.handle.take() {
-            t.join().unwrap();
+            if let Err(e) = t.join() {
+                log::error!("Failed to join CD cache prefetcher thread: {:?}", e);
+            }
         }
     }
 }
@@ -125,12 +140,24 @@ impl Reader {
 fn run_prefetcher(mut image: Box<dyn Image>, reader: Arc<(Mutex<Reader>, Condvar)>) {
     let (reader_mutex, cond) = &*reader;
 
-    let mut reader = reader_mutex.lock().unwrap();
+    let mut reader = match reader_mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("CD cache prefetcher mutex was poisoned, attempting recovery");
+            poisoned.into_inner()
+        }
+    };
 
     while !reader.quit {
         if reader.prefetch_remaining == 0 {
             // Nothing left to do, wait for the next prefetch command
-            reader = cond.wait(reader).unwrap();
+            reader = match cond.wait(reader) {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    log::error!("CD cache prefetcher condvar wait failed, attempting recovery");
+                    poisoned.into_inner()
+                }
+            };
             continue;
         }
 
@@ -165,7 +192,13 @@ fn run_prefetcher(mut image: Box<dyn Image>, reader: Arc<(Mutex<Reader>, Condvar
         };
 
         // Re-lock the reader
-        reader = reader_mutex.lock().unwrap();
+        reader = match reader_mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                log::error!("CD cache prefetcher mutex was poisoned on re-lock, attempting recovery");
+                poisoned.into_inner()
+            }
+        };
 
         reader.sectors.insert(fetch_msf, sector);
         // If the emulator was waiting for a sector, wake it up

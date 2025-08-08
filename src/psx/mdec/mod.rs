@@ -877,13 +877,24 @@ impl MacroblockCoeffs {
         if pos >= 64 {
             // XXX Not sure how the MDEC deals with index
             // overflows. Does it wrap around somehow? Does it move to
-            // the next block?
-            panic!("Block index overflow!");
+            // the next block? For now, just warn and ignore.
+            log::warn!("MDEC block index overflow: pos = {}, ignoring coefficient", pos);
+            return;
         }
 
-        let index = zigzag[pos as usize];
+        let pos_idx = pos as usize;
+        if pos_idx >= zigzag.len() {
+            log::warn!("MDEC zigzag table access out of bounds: pos = {}", pos);
+            return;
+        }
 
-        self.coeffs[index as usize] = coeff
+        let index = zigzag[pos_idx] as usize;
+        if index >= self.coeffs.len() {
+            log::warn!("MDEC coefficient array access out of bounds: index = {}", index);
+            return;
+        }
+
+        self.coeffs[index] = coeff
     }
 }
 

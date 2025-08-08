@@ -33,8 +33,9 @@ impl Synchronizer {
     }
 
     pub fn refresh_first_event(&mut self) {
-        // The only way `min()` can return None is if the array is empty which is impossible here.
-        self.first_event = *self.next_event.iter().min().unwrap();
+        // The array is guaranteed to be non-empty since NumTokens > 0
+        self.first_event = *self.next_event.iter().min()
+            .expect("next_event array should never be empty");
     }
 
     pub fn first_event(&self) -> CycleCount {

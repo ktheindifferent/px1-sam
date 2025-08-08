@@ -939,7 +939,18 @@ pub fn gl_frame_done(width: u32, height: u32) {
 /// This function is unsafe because it needs to be called from the same thread as retro_run.
 pub fn send_audio_samples(samples: &[i16]) {
     if samples.len() & 1 != 0 {
-        panic!("Received an odd number of audio samples!");
+        warn!("Received an odd number of audio samples ({}), dropping last sample", samples.len());
+        // Process only even number of samples, avoid recursion by handling directly
+        let even_len = samples.len() & !1;
+        if even_len == 0 {
+            return;
+        }
+        let frames = (even_len / 2) as size_t;
+        let r = unsafe { AUDIO_SAMPLE_BATCH(samples.as_ptr(), frames) };
+        if r != frames {
+            warn!("Frontend didn't use all our samples! ({} != {}), audio may be choppy", r, frames);
+        }
+        return;
     }
 
     let frames = (samples.len() / 2) as size_t;
@@ -947,7 +958,8 @@ pub fn send_audio_samples(samples: &[i16]) {
     let r = unsafe { AUDIO_SAMPLE_BATCH(samples.as_ptr(), frames) };
 
     if r != frames {
-        panic!("Frontend didn't use all our samples! ({} != {})", r, frames);
+        warn!("Frontend didn't use all our samples! ({} != {}), audio may be choppy", r, frames);
+        // Don't panic, just continue - this might cause audio issues but won't crash
     }
 }
 

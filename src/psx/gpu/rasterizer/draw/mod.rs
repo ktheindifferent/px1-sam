@@ -798,11 +798,12 @@ impl Rasterizer {
                     .cmp(&v1.position.x)
                     .then_with(|| v1.index.cmp(&v0.index))
             })
-            .unwrap();
+            .expect("Triangle must have at least one vertex");
 
         let x_min = core_vertex.position.x;
 
-        let x_max = vertices.iter().map(|v| v.position.x).max().unwrap();
+        let x_max = vertices.iter().map(|v| v.position.x).max()
+            .expect("Triangle must have at least one vertex");
 
         if x_max - x_min >= (1024 << self.vram.upscale_shift) {
             // Triangle is too large, give up

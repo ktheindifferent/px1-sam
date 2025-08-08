@@ -296,7 +296,10 @@ impl Psx {
             let v = match off {
                 0 => u32::from(irq::status(self)),
                 4 => u32::from(irq::mask(self)),
-                _ => panic!("Unhandled IRQ load at address {:08x}", abs_addr),
+                _ => {
+                    warn!("Unhandled IRQ load at address {:08x}, returning 0", abs_addr);
+                    0
+                }
             };
 
             // Since the IRQ registers are only 16bit wide the high 32bits are undefined. In
@@ -348,12 +351,9 @@ impl Psx {
             return Addressable::from_u32(self.ram_size);
         }
 
-        if cfg!(feature = "debugger") {
-            warn!("Unhandled load at address {:08x}", abs_addr);
-            Addressable::from_u32(0xdeaddead)
-        } else {
-            panic!("Unhandled load at address {:08x}", abs_addr);
-        }
+        // Log warning and return a safe default value instead of panicking
+        warn!("Unhandled load at address {:08x}, returning 0xdeadbeef", abs_addr);
+        Addressable::from_u32(0xdeadbeef)
     }
 
     /// Decode `address` and perform the store to the target module
@@ -408,7 +408,9 @@ impl Psx {
             match offset {
                 0 => irq::ack(self, val.as_u16()),
                 4 => irq::set_mask(self, val.as_u16()),
-                _ => panic!("Unhandled IRQ store at address {:08x}", abs_addr),
+                _ => {
+                    warn!("Unhandled IRQ store at address {:08x}, ignoring", abs_addr);
+                }
             }
 
             return;
