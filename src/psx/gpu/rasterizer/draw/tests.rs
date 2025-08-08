@@ -49,7 +49,7 @@ fn mbgr_px(mbgr: u16) -> Pixel {
 fn check_rasterizer(rasterizer: &Rasterizer, expected: &[&[Pixel]]) {
     for (y, line) in expected.iter().enumerate() {
         for (x, &color) in line.iter().enumerate() {
-            let p = rasterizer.vram[y * 1024 + x].to_mbgr1555();
+            let p = rasterizer.vram.pixel(x as u32, y as u32).to_mbgr1555();
             let color = color.to_mbgr1555();
 
             assert_eq!(

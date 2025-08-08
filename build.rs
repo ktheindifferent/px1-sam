@@ -10,9 +10,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    let out_dir = env::var("OUT_DIR").unwrap();
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR environment variable not set");
     let dest_path = Path::new(&out_dir).join("version.rs");
-    let mut f = File::create(dest_path).unwrap();
+    let mut f = File::create(&dest_path).expect("Failed to create version.rs file");
 
     let git = env::var("GIT").unwrap_or_else(|_| "git".into());
 
@@ -23,7 +23,13 @@ fn main() {
     let mut version = match description {
         Ok(output) => {
             if output.status.success() {
-                format!("git-{}", String::from_utf8(output.stdout).unwrap())
+                match String::from_utf8(output.stdout) {
+                    Ok(s) => format!("git-{}", s),
+                    Err(_) => {
+                        eprintln!("Warning: git describe output is not valid UTF-8, using cargo version");
+                        cargo_version
+                    }
+                }
             } else {
                 cargo_version
             }
@@ -36,8 +42,12 @@ fn main() {
         version.truncate(l);
     }
 
-    writeln!(f, "#[allow(dead_code)]").unwrap();
-    writeln!(f, "pub const VERSION: &str = \"{}\";", version).unwrap();
-    writeln!(f, "#[allow(dead_code)]").unwrap();
-    writeln!(f, "pub const VERSION_CSTR: &str = \"{}\\0\";", version).unwrap();
+    writeln!(f, "#[allow(dead_code)]")
+        .expect("Failed to write to version.rs");
+    writeln!(f, "pub const VERSION: &str = \"{}\";", version)
+        .expect("Failed to write VERSION to version.rs");
+    writeln!(f, "#[allow(dead_code)]")
+        .expect("Failed to write to version.rs");
+    writeln!(f, "pub const VERSION_CSTR: &str = \"{}\\0\";", version)
+        .expect("Failed to write VERSION_CSTR to version.rs");
 }

@@ -1191,7 +1191,10 @@ fn op_cop0(psx: &mut Psx, instruction: Instruction) {
         0b00000 => op_mfc0(psx, instruction),
         0b00100 => op_mtc0(psx, instruction),
         0b10000 => op_rfe(psx, instruction),
-        _ => panic!("Unhandled cop0 instruction {}", instruction),
+        _ => {
+            warn!("Unhandled cop0 instruction {}, treating as NOP", instruction);
+            // Treat as NOP instead of panicking
+        }
     }
 }
 

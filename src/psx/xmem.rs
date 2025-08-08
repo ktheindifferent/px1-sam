@@ -189,17 +189,30 @@ impl XMemory {
     /// Fetch instruction at absolute address `addr`
     pub fn load_instruction(&self, addr: u32) -> cpu::Instruction {
         let page = addr >> PAGE_SHIFT;
+        let page_idx = page as usize;
 
-        let mem_page = self.offset_lut[page as usize] as u32;
+        // Bounds check for page lookup table
+        if page_idx >= self.offset_lut.len() {
+            log::error!("Invalid memory page access: page {} >= {}", page_idx, self.offset_lut.len());
+            return cpu::Instruction::new(0);
+        }
+
+        let mem_page = self.offset_lut[page_idx] as u32;
 
         let mut offset = mem_page << PAGE_SHIFT;
-
         offset |= addr & ((1 << PAGE_SHIFT) - 1);
 
         // We index one word at a time
         offset >>= 2;
+        let word_idx = offset as usize;
 
-        let word = self.memory[offset as usize];
+        // Bounds check for memory array
+        let word = if word_idx >= self.memory.len() {
+            log::error!("Invalid memory word access: index {} >= {}", word_idx, self.memory.len());
+            0
+        } else {
+            self.memory[word_idx]
+        };
 
         cpu::Instruction::new(word)
     }

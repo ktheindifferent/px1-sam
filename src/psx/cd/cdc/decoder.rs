@@ -1029,7 +1029,10 @@ pub fn host_write(cdc: &mut Cdc, addr: u8, v: u8) {
 
             decoder.adp_mute = v.bit(0);
         }
-        _ => todo!("Host write 0x{:02x} @ {}:{}", v, addr, decoder.ra),
+        _ => {
+            log::warn!("Unimplemented CD controller host write 0x{:02x} @ {}:{}", v, addr, decoder.ra);
+            // Ignore unimplemented writes to avoid crashes
+        }
     }
 
     refresh_irq(cdc);
@@ -1059,7 +1062,11 @@ pub fn host_read(cdc: &mut Cdc, addr: u8) -> u8 {
         (3, 0) => decoder.hintmsk,
         // HINTSTS
         (3, 1) => decoder.hintsts,
-        _ => todo!("Host read @ {}:{}", addr, decoder.ra),
+        _ => {
+            log::warn!("Unimplemented CD controller host read @ {}:{}", addr, decoder.ra);
+            // Return 0 for unimplemented reads to avoid crashes
+            0
+        }
     }
 }
 
