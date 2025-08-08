@@ -1,5 +1,15 @@
 pub mod gamepad;
 pub mod memory_card;
+pub mod peripheral_trait;
+pub mod negcon;
+pub mod mouse;
+pub mod guncon;
+pub mod multitap;
+pub mod fishing;
+pub mod dance_mat;
+
+// Re-export common types
+pub use peripheral_trait::{Peripheral as PeripheralTrait, Response};
 
 use super::DsrState;
 use gamepad::{Button, ButtonState};
