@@ -38,21 +38,40 @@ You need to [install a Rust build environment](https://www.rust-lang.org/).
 Normally it's fairly straightforward, just follow the instructions on Rust's
 website.
 
+### macOS-specific requirements
+
+On macOS, you'll need:
+- Xcode Command Line Tools (install with `xcode-select --install`)
+- Rust toolchain (install via [rustup](https://rustup.rs/))
+
+### Building
+
 Once that's done you can build an optimized build with:
 
     cargo build --release
 
 That should download all dependencies and output the core library in
-`target/release/`. On Linux that file is named `librustation_ng_retro.so` but
-the name may vary on other platforms.
+`target/release/`. The library file name varies by platform:
+- Linux: `librustation_ng_retro.so`
+- macOS: `librustation_ng_retro.dylib`
+- Windows: `rustation_ng_retro.dll`
 
 ## Run
 
 Once the core is compiled you can load it in your favourite libretro player to
-play your PlayStation games in BIN/CUE format. For instance using retroarch you
-can do:
+play your PlayStation games in BIN/CUE format. For instance using RetroArch:
+
+On Linux:
 
     retroarch -L librustation_ng_retro.so my_game.cue
+
+On macOS:
+
+    retroarch -L librustation_ng_retro.dylib my_game.cue
+
+On Windows:
+
+    retroarch -L rustation_ng_retro.dll my_game.cue
 
 ZIP archives containing bin/cue are also supported. If the archive contains
 several cue files only the first one (in archive order) will be used.
