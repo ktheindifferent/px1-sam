@@ -7,6 +7,7 @@ pub mod cpu;
 #[cfg(feature = "debugger")]
 pub mod debugger;
 mod dma;
+mod expansion;
 pub mod gpu;
 mod gte;
 mod irq;
@@ -49,6 +50,8 @@ pub struct Psx {
     mdec: mdec::MDec,
     pub cd: cd::CdInterface,
     pub pad_memcard: pad_memcard::PadMemCard,
+    /// Expansion port controller
+    expansion: expansion::ExpansionPort,
     /// Memory control registers
     mem_control: [u32; 9],
     /// Contents of the RAM_SIZE register which is probably a configuration register for the memory
@@ -102,6 +105,7 @@ impl Psx {
             mdec: mdec::MDec::new(),
             cd,
             pad_memcard: pad_memcard::PadMemCard::new(),
+            expansion: expansion::ExpansionPort::new(),
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,
@@ -319,10 +323,9 @@ impl Psx {
             return Addressable::from_u32(v | 0x1f80_0000);
         }
 
-        if map::EXPANSION_1.contains(abs_addr).is_some() {
-            // No expansion implemented. Returns full ones when no
-            // expansion is present
-            return Addressable::from_u32(!0);
+        if let Some(offset) = map::EXPANSION_1.contains(abs_addr) {
+            // Expansion port region 1
+            return self.expansion.load(offset);
         }
 
         if map::CACHE_CONTROL.contains(abs_addr).is_some() {
@@ -417,7 +420,8 @@ impl Psx {
         }
 
         if let Some(offset) = map::EXPANSION_1.contains(abs_addr) {
-            warn!("Unhandled write to expansion 1 register {:x}", offset);
+            // Expansion port region 1
+            self.expansion.store(offset, val);
             return;
         }
 

@@ -141,10 +141,19 @@ impl MDec {
                             self.state = State::LoadQuantTable(0);
                         }
                         3 => {
+                            // Load IDCT matrix
                             self.command_remaining = 32;
                             self.state = State::LoadIdctMatrix;
                         }
-                        o => unimplemented!("MDEC command {:x}", o),
+                        0 => {
+                            // NOP command
+                            self.state = State::Idle;
+                        }
+                        _ => {
+                            // Unknown command, treat as NOP
+                            warn!("Unknown MDEC command: {:x}", self.command.0);
+                            self.state = State::Idle;
+                        }
                     }
                 }
                 State::LoadQuantTable(index) => {
@@ -490,37 +499,67 @@ pub fn run(psx: &mut Psx) {
 pub fn store<T: Addressable>(psx: &mut Psx, off: u32, val: T) {
     run(psx);
 
-    if T::width() != AccessWidth::Word {
-        unimplemented!("Unhandled MDEC store ({:?})", T::width());
-    }
-
     let val = val.as_u32();
 
     match off {
         0 => {
-            psx.mdec.push_command(val);
-            if !psx.mdec.is_busy() && psx.mdec.decoder_cycle_budget < 1 {
-                psx.mdec.decoder_cycle_budget = 1;
+            // Command/data register
+            match T::width() {
+                AccessWidth::Word => {
+                    psx.mdec.push_command(val);
+                    if !psx.mdec.is_busy() && psx.mdec.decoder_cycle_budget < 1 {
+                        psx.mdec.decoder_cycle_budget = 1;
+                    }
+                }
+                AccessWidth::HalfWord => {
+                    // Push 16-bit data, pad to 32-bit
+                    psx.mdec.push_command(val & 0xFFFF);
+                }
+                AccessWidth::Byte => {
+                    // Push 8-bit data, pad to 32-bit
+                    psx.mdec.push_command(val & 0xFF);
+                }
             }
         }
-        4 => psx.mdec.set_control(val),
-        _ => unimplemented!("Unhandled MDEC store: {:08x} {:08x}", off, val),
+        4 => {
+            // Control register
+            psx.mdec.set_control(val);
+        }
+        _ => {
+            warn!("MDEC store to unknown register: {:08x} = {:08x}", off, val);
+        }
     }
 }
 
 pub fn load<T: Addressable>(psx: &mut Psx, off: u32) -> T {
     run(psx);
 
-    if T::width() != AccessWidth::Word {
-        unimplemented!("Unhandled MDEC load ({:?})", T::width());
-    }
-
     let v = match off {
-        4 => psx.mdec.status(),
-        _ => unimplemented!("Unhandled MDEC load: {:08x}", off),
+        0 => {
+            // Data output register
+            if psx.mdec.output_fifo.is_empty() {
+                warn!("MDEC data read with empty FIFO");
+                0xFFFFFFFF
+            } else {
+                psx.mdec.output_fifo.pop()
+            }
+        }
+        4 => {
+            // Status register
+            psx.mdec.status()
+        }
+        _ => {
+            warn!("MDEC load from unknown register: {:08x}", off);
+            0xFFFFFFFF
+        }
     };
 
-    T::from_u32(v)
+    // Handle different access widths
+    match T::width() {
+        AccessWidth::Byte => T::from_u32(v & 0xFF),
+        AccessWidth::HalfWord => T::from_u32(v & 0xFFFF),
+        AccessWidth::Word => T::from_u32(v),
+    }
 }
 
 pub fn dma_can_write(psx: &mut Psx) -> bool {
