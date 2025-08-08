@@ -6,12 +6,15 @@ pub mod cop0;
 pub mod cpu;
 #[cfg(feature = "debugger")]
 pub mod debugger;
+mod cache;
 mod dma;
 mod expansion;
 pub mod gpu;
 mod gte;
 mod irq;
+mod link_cable;
 mod mdec;
+mod memory_control;
 pub mod pad_memcard;
 mod spu;
 mod sync;
@@ -52,7 +55,13 @@ pub struct Psx {
     pub pad_memcard: pad_memcard::PadMemCard,
     /// Expansion port controller
     expansion: expansion::ExpansionPort,
-    /// Memory control registers
+    /// Link cable controller
+    link_cable: link_cable::LinkCable,
+    /// Enhanced cache system
+    cache_system: cache::CacheSystem,
+    /// Enhanced memory control
+    memory_ctrl: memory_control::MemoryControl,
+    /// Memory control registers (legacy)
     mem_control: [u32; 9],
     /// Contents of the RAM_SIZE register which is probably a configuration register for the memory
     /// controller.
@@ -106,6 +115,9 @@ impl Psx {
             cd,
             pad_memcard: pad_memcard::PadMemCard::new(),
             expansion: expansion::ExpansionPort::new(),
+            link_cable: link_cable::LinkCable::new(),
+            cache_system: cache::CacheSystem::new(),
+            memory_ctrl: memory_control::MemoryControl::new(),
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,

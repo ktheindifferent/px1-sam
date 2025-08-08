@@ -9,6 +9,7 @@ pub enum SyncToken {
     Dma,
     PadMemCard,
     MDec,
+    LinkCable,
 
     NumTokens,
 }
