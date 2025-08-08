@@ -14,7 +14,21 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("version.rs");
     let mut f = File::create(&dest_path).expect("Failed to create version.rs file");
 
-    let git = env::var("GIT").unwrap_or_else(|_| "git".into());
+    let git = env::var("GIT").unwrap_or_else(|_| {
+        // On macOS, git might be installed via Homebrew or Xcode Command Line Tools
+        if cfg!(target_os = "macos") {
+            // Try common macOS git locations
+            if Path::new("/usr/bin/git").exists() {
+                "/usr/bin/git".into()
+            } else if Path::new("/opt/homebrew/bin/git").exists() {
+                "/opt/homebrew/bin/git".into()
+            } else {
+                "git".into() // Fall back to PATH
+            }
+        } else {
+            "git".into()
+        }
+    });
 
     let description = Command::new(git).arg("describe").arg("--dirty").output();
 

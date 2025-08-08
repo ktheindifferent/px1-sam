@@ -30,9 +30,16 @@ impl Cache {
 
         let thread_reader = reader.clone();
 
+        // macOS has smaller default thread stack sizes, so we need to be more conservative
+        let stack_size = if cfg!(target_os = "macos") {
+            512 * 1024  // 512KB for macOS
+        } else {
+            1024 * 1024 // 1MB for other platforms
+        };
+        
         let builder = thread::Builder::new()
             .name("RSX CD prefetch".to_string())
-            .stack_size(1024 * 1024);
+            .stack_size(stack_size);
 
         let handle = builder
             .spawn(move || {
