@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Full PSX WASM Test</title>
+    <style>
+        body {
+            background: #1e1e1e;
+            color: #ccc;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        #canvas {
+            border: 2px solid #444;
+            image-rendering: pixelated;
+            width: 640px;
+            height: 480px;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            margin: 0 10px;
+            padding: 10px 20px;
+            background: #333;
+            color: #ccc;
+            border: 1px solid #555;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #444;
+        }
+        #debug {
+            margin-top: 20px;
+            padding: 10px;
+            background: #222;
+            border: 1px solid #444;
+            width: 640px;
+            height: 100px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 2px 0;
+        }
+        .error { color: #f66; }
+        .info { color: #6cf; }
+        .success { color: #6f6; }
+    </style>
+</head>
+<body>
+    <h1>Full PSX WASM Emulator Test</h1>
+    <canvas id="canvas"></canvas>
+    
+    <div class="controls">
+        <button onclick="startEmulator()">Start</button>
+        <button onclick="stopEmulator()">Stop</button>
+        <button onclick="resetEmulator()">Reset</button>
+        <button onclick="runTest()">Run Test</button>
+    </div>
+    
+    <div id="debug"></div>
+
+    <script type="module">
+        import init, { PsxEmulator } from './wasm-pkg/rustation_wasm.js';
+        
+        let emulator = null;
+        let animationId = null;
+        
+        function addLog(message, type = 'info') {
+            const debug = document.getElementById('debug');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            debug.appendChild(entry);
+            debug.scrollTop = debug.scrollHeight;
+        }
+        
+        async function initEmulator() {
+            try {
+                addLog('Initializing WASM module...', 'info');
+                await init();
+                
+                addLog('Creating PSX emulator instance...', 'info');
+                emulator = new PsxEmulator('canvas');
+                
+                // Create a simple test BIOS (all NOPs)
+                const testBios = new Uint8Array(512 * 1024);
+                // Add some basic MIPS instructions at BIOS start
+                // LUI $t0, 0x1f80
+                testBios[0] = 0x00;
+                testBios[1] = 0x80;
+                testBios[2] = 0x08;
+                testBios[3] = 0x3c;
+                
+                // ORI $t0, $t0, 0x1000
+                testBios[4] = 0x00;
+                testBios[5] = 0x10;
+                testBios[6] = 0x08;
+                testBios[7] = 0x35;
+                
+                // Loop: J Loop (infinite loop)
+                testBios[8] = 0x02;
+                testBios[9] = 0x00;
+                testBios[10] = 0x00;
+                testBios[11] = 0x08;
+                
+                emulator.load_bios(testBios);
+                addLog('Test BIOS loaded successfully', 'success');
+                
+                // Set up keyboard event handlers
+                document.addEventListener('keydown', (e) => {
+                    if (emulator) {
+                        emulator.handle_keyboard_event(e, true);
+                    }
+                });
+                
+                document.addEventListener('keyup', (e) => {
+                    if (emulator) {
+                        emulator.handle_keyboard_event(e, false);
+                    }
+                });
+                
+                addLog('Emulator initialized successfully!', 'success');
+            } catch (error) {
+                addLog(`Initialization failed: ${error}`, 'error');
+                console.error('Init error:', error);
+            }
+        }
+        
+        window.startEmulator = function() {
+            if (!emulator) {
+                addLog('Emulator not initialized', 'error');
+                return;
+            }
+            
+            try {
+                emulator.start();
+                addLog('Emulator started', 'success');
+                
+                // Start render loop
+                function renderFrame() {
+                    try {
+                        emulator.run_frame();
+                        const debugInfo = emulator.get_debug_info();
+                        document.title = `PSX WASM - ${debugInfo}`;
+                    } catch (error) {
+                        addLog(`Frame error: ${error}`, 'error');
+                        stopEmulator();
+                        return;
+                    }
+                    animationId = requestAnimationFrame(renderFrame);
+                }
+                renderFrame();
+            } catch (error) {
+                addLog(`Start failed: ${error}`, 'error');
+            }
+        };
+        
+        window.stopEmulator = function() {
+            if (!emulator) return;
+            
+            try {
+                emulator.stop();
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }
+                addLog('Emulator stopped', 'info');
+            } catch (error) {
+                addLog(`Stop failed: ${error}`, 'error');
+            }
+        };
+        
+        window.resetEmulator = function() {
+            if (!emulator) return;
+            
+            try {
+                stopEmulator();
+                emulator.reset();
+                addLog('Emulator reset', 'info');
+            } catch (error) {
+                addLog(`Reset failed: ${error}`, 'error');
+            }
+        };
+        
+        window.runTest = function() {
+            addLog('Running CPU instruction test...', 'info');
+            
+            if (!emulator) {
+                addLog('Emulator not initialized', 'error');
+                return;
+            }
+            
+            try {
+                // Create a simple PSX-EXE test program
+                const testExe = new Uint8Array(0x1000);
+                
+                // PSX-EXE header
+                const header = new TextEncoder().encode('PS-X EXE');
+                for (let i = 0; i < header.length; i++) {
+                    testExe[i] = header[i];
+                }
+                
+                // Initial PC (0x80010000)
+                testExe[0x10] = 0x00;
+                testExe[0x11] = 0x00;
+                testExe[0x12] = 0x01;
+                testExe[0x13] = 0x80;
+                
+                // Initial GP (0x80010000)
+                testExe[0x14] = 0x00;
+                testExe[0x15] = 0x00;
+                testExe[0x16] = 0x01;
+                testExe[0x17] = 0x80;
+                
+                // Load address (0x80010000)
+                testExe[0x18] = 0x00;
+                testExe[0x19] = 0x00;
+                testExe[0x1a] = 0x01;
+                testExe[0x1b] = 0x80;
+                
+                // File size (0x100 bytes)
+                testExe[0x1c] = 0x00;
+                testExe[0x1d] = 0x01;
+                testExe[0x1e] = 0x00;
+                testExe[0x1f] = 0x00;
+                
+                // Initial SP (0x801fff00)
+                testExe[0x30] = 0x00;
+                testExe[0x31] = 0xff;
+                testExe[0x32] = 0x1f;
+                testExe[0x33] = 0x80;
+                
+                // Add some test instructions at 0x800
+                // ADDIU $t0, $zero, 0x1234
+                testExe[0x800] = 0x34;
+                testExe[0x801] = 0x12;
+                testExe[0x802] = 0x08;
+                testExe[0x803] = 0x24;
+                
+                // ADDIU $t1, $zero, 0x5678
+                testExe[0x804] = 0x78;
+                testExe[0x805] = 0x56;
+                testExe[0x806] = 0x09;
+                testExe[0x807] = 0x24;
+                
+                // ADD $t2, $t0, $t1
+                testExe[0x808] = 0x20;
+                testExe[0x809] = 0x50;
+                testExe[0x80a] = 0x09;
+                testExe[0x80b] = 0x01;
+                
+                // Infinite loop: J self
+                testExe[0x80c] = 0x03;
+                testExe[0x80d] = 0x00;
+                testExe[0x80e] = 0x04;
+                testExe[0x80f] = 0x08;
+                
+                emulator.load_game(testExe);
+                addLog('Test EXE loaded successfully', 'success');
+                
+                // Run a few frames to execute the test
+                for (let i = 0; i < 10; i++) {
+                    emulator.run_frame();
+                }
+                
+                const debugInfo = emulator.get_debug_info();
+                addLog(`Test complete: ${debugInfo}`, 'success');
+                
+            } catch (error) {
+                addLog(`Test failed: ${error}`, 'error');
+            }
+        };
+        
+        // Initialize on page load
+        initEmulator();
+    </script>
+</body>
+</html>

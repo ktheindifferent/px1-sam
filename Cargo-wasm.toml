@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
-path = "src/wasm_simple.rs"
+path = "src/wasm_enhanced.rs"
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -31,6 +31,9 @@ features = [
   "CanvasRenderingContext2d",
   "ImageData",
   "KeyboardEvent",
+  "AudioContext",
+  "Gamepad",
+  "GamepadButton",
 ]
 
 [profile.release]

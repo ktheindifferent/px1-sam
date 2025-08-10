@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PSX WASM Test Suite</title>
+    <style>
+        body {
+            background: #1e1e1e;
+            color: #ddd;
+            font-family: 'Consolas', 'Monaco', monospace;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 {
+            color: #6cf;
+            border-bottom: 2px solid #444;
+            padding-bottom: 10px;
+        }
+        #test-output {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .test-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid transparent;
+        }
+        .test-entry.running {
+            border-left-color: #fc0;
+            background: rgba(255, 204, 0, 0.1);
+        }
+        .test-entry.passed {
+            border-left-color: #6f6;
+            background: rgba(102, 255, 102, 0.1);
+        }
+        .test-entry.failed {
+            border-left-color: #f66;
+            background: rgba(255, 102, 102, 0.1);
+        }
+        .timestamp {
+            color: #888;
+            font-size: 0.9em;
+        }
+        .test-name {
+            color: #6cf;
+            font-weight: bold;
+        }
+        .success { color: #6f6; }
+        .error { color: #f66; }
+        .warning { color: #fc0; }
+        .info { color: #6cf; }
+        #summary {
+            margin-top: 20px;
+            padding: 15px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 5px;
+        }
+        button {
+            background: #333;
+            color: #ccc;
+            border: 1px solid #555;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        button:hover {
+            background: #444;
+        }
+        #progress {
+            width: 100%;
+            height: 20px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        #progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #6cf, #6f6);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 PSX WASM Emulator Test Suite</h1>
+    
+    <div>
+        <button onclick="runTests()">Run All Tests</button>
+        <button onclick="clearOutput()">Clear Output</button>
+    </div>
+    
+    <div id="progress">
+        <div id="progress-bar"></div>
+    </div>
+    
+    <div id="test-output"></div>
+    
+    <div id="summary"></div>
+
+    <script type="module">
+        import init, { PsxEmulator } from './wasm-pkg/rustation_wasm.js';
+        
+        window.testSuite = null;
+        window.testsRunning = false;
+        
+        class TestRunner {
+            constructor() {
+                this.output = document.getElementById('test-output');
+                this.summary = document.getElementById('summary');
+                this.progressBar = document.getElementById('progress-bar');
+                this.tests = [];
+                this.currentTestIndex = 0;
+            }
+            
+            addOutput(message, type = 'info', testName = null) {
+                const entry = document.createElement('div');
+                entry.className = `test-entry ${type}`;
+                
+                const timestamp = new Date().toLocaleTimeString();
+                let html = `<span class="timestamp">[${timestamp}]</span> `;
+                
+                if (testName) {
+                    html += `<span class="test-name">${testName}:</span> `;
+                }
+                
+                html += `<span class="${type}">${this.escapeHtml(message)}</span>`;
+                entry.innerHTML = html;
+                
+                this.output.appendChild(entry);
+                this.output.scrollTop = this.output.scrollHeight;
+            }
+            
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+            
+            updateProgress(current, total) {
+                const percent = (current / total) * 100;
+                this.progressBar.style.width = `${percent}%`;
+            }
+            
+            async runTest(name, testFn) {
+                this.addOutput(`Starting test...`, 'running', name);
+                
+                try {
+                    await testFn();
+                    this.addOutput(`✓ Test passed`, 'passed', name);
+                    return true;
+                } catch (error) {
+                    this.addOutput(`✗ Test failed: ${error}`, 'failed', name);
+                    console.error(error);
+                    return false;
+                }
+            }
+            
+            async runAllTests() {
+                this.output.innerHTML = '';
+                this.summary.innerHTML = '';
+                this.progressBar.style.width = '0%';
+                
+                this.addOutput('Initializing WASM module...', 'info');
+                await init();
+                
+                const tests = [
+                    ['Emulator Initialization', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        if (!emulator) throw new Error('Failed to create emulator');
+                        
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['BIOS Loading', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        const bios = new Uint8Array(512 * 1024);
+                        
+                        // Add test BIOS code
+                        bios[0] = 0x00; bios[1] = 0x80; bios[2] = 0x08; bios[3] = 0x3c;
+                        
+                        emulator.load_bios(bios);
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['EXE Loading', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        
+                        // Load BIOS
+                        const bios = new Uint8Array(512 * 1024);
+                        emulator.load_bios(bios);
+                        
+                        // Create EXE
+                        const exe = new Uint8Array(0x1000);
+                        const header = new TextEncoder().encode('PS-X EXE');
+                        for (let i = 0; i < header.length; i++) {
+                            exe[i] = header[i];
+                        }
+                        
+                        exe[0x10] = 0x00; exe[0x11] = 0x00; exe[0x12] = 0x01; exe[0x13] = 0x80;
+                        exe[0x18] = 0x00; exe[0x19] = 0x00; exe[0x1a] = 0x01; exe[0x1b] = 0x80;
+                        exe[0x1c] = 0x00; exe[0x1d] = 0x01; exe[0x1e] = 0x00; exe[0x1f] = 0x00;
+                        exe[0x30] = 0x00; exe[0x31] = 0xff; exe[0x32] = 0x1f; exe[0x33] = 0x80;
+                        
+                        emulator.load_game(exe);
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['CPU Execution', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        const bios = new Uint8Array(512 * 1024);
+                        emulator.load_bios(bios);
+                        
+                        emulator.start();
+                        for (let i = 0; i < 10; i++) {
+                            emulator.run_frame();
+                        }
+                        
+                        const debug = emulator.get_debug_info();
+                        this.addOutput(`CPU state: ${debug}`, 'info');
+                        
+                        emulator.stop();
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['Frame Rendering', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        const bios = new Uint8Array(512 * 1024);
+                        emulator.load_bios(bios);
+                        
+                        emulator.start();
+                        emulator.run_frame();
+                        
+                        const fb = emulator.get_frame_buffer();
+                        if (!fb || fb.length === 0) {
+                            throw new Error('Empty framebuffer');
+                        }
+                        
+                        this.addOutput(`Framebuffer size: ${fb.length} bytes`, 'info');
+                        
+                        emulator.stop();
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['Input Handling', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        
+                        const event = new KeyboardEvent('keydown', {
+                            key: 'X',
+                            keyCode: 88
+                        });
+                        
+                        emulator.handle_keyboard_event(event, true);
+                        emulator.handle_keyboard_event(event, false);
+                        
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['Reset Function', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        const bios = new Uint8Array(512 * 1024);
+                        emulator.load_bios(bios);
+                        
+                        emulator.start();
+                        emulator.run_frame();
+                        emulator.reset();
+                        
+                        const debug = emulator.get_debug_info();
+                        if (!debug.includes('PC: bfc00000')) {
+                            throw new Error('Reset failed - PC not at BIOS start');
+                        }
+                        
+                        document.body.removeChild(canvas);
+                    }],
+                    
+                    ['Memory Regions', async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.id = 'test-canvas';
+                        canvas.style.display = 'none';
+                        document.body.appendChild(canvas);
+                        
+                        const emulator = new PsxEmulator('test-canvas');
+                        const bios = new Uint8Array(512 * 1024);
+                        
+                        // Test different memory access patterns
+                        bios[0] = 0x00; bios[1] = 0x80; bios[2] = 0x08; bios[3] = 0x3c; // LUI
+                        bios[4] = 0x00; bios[5] = 0x00; bios[6] = 0x09; bios[7] = 0xad; // SW
+                        
+                        emulator.load_bios(bios);
+                        emulator.start();
+                        
+                        for (let i = 0; i < 5; i++) {
+                            emulator.run_frame();
+                        }
+                        
+                        emulator.stop();
+                        document.body.removeChild(canvas);
+                    }]
+                ];
+                
+                let passed = 0;
+                let failed = 0;
+                
+                for (let i = 0; i < tests.length; i++) {
+                    const [name, testFn] = tests[i];
+                    this.updateProgress(i + 1, tests.length);
+                    
+                    const result = await this.runTest(name, testFn);
+                    if (result) {
+                        passed++;
+                    } else {
+                        failed++;
+                    }
+                }
+                
+                // Show summary
+                const total = tests.length;
+                const passRate = ((passed / total) * 100).toFixed(1);
+                
+                this.summary.innerHTML = `
+                    <h2>Test Summary</h2>
+                    <div style="font-size: 1.2em;">
+                        <div class="success">✓ Passed: ${passed}</div>
+                        <div class="error">✗ Failed: ${failed}</div>
+                        <div class="info">📊 Total: ${total}</div>
+                        <div class="warning">📈 Pass Rate: ${passRate}%</div>
+                    </div>
+                `;
+                
+                this.addOutput(`All tests completed! Pass rate: ${passRate}%`, 
+                              passed === total ? 'success' : 'warning');
+            }
+        }
+        
+        window.runTests = async function() {
+            if (window.testsRunning) {
+                alert('Tests are already running!');
+                return;
+            }
+            
+            window.testsRunning = true;
+            const runner = new TestRunner();
+            
+            try {
+                await runner.runAllTests();
+            } catch (error) {
+                runner.addOutput(`Fatal error: ${error}`, 'error');
+                console.error(error);
+            } finally {
+                window.testsRunning = false;
+            }
+        };
+        
+        window.clearOutput = function() {
+            document.getElementById('test-output').innerHTML = '';
+            document.getElementById('summary').innerHTML = '';
+            document.getElementById('progress-bar').style.width = '0%';
+        };
+        
+        // Auto-run on load
+        window.addEventListener('load', () => {
+            setTimeout(() => runTests(), 500);
+        });
+    </script>
+</body>
+</html>
