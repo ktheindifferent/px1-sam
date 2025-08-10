@@ -169,7 +169,7 @@ impl PeripheralTrait for DanceMat {
 }
 
 /// Dance pad positions
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DancePad {
     // Arrow pads (main gameplay)
     Up,

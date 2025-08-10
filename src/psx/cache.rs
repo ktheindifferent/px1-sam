@@ -6,7 +6,7 @@
 use super::{AccessWidth, Addressable, Psx};
 
 /// Cache control register bits
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CacheControl {
     /// Enable instruction cache
     pub icache_enable: bool,
@@ -133,6 +133,7 @@ impl CacheLine {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct InstructionCache {
     /// 256 cache lines of 16 bytes each = 4KB
+    #[serde(with = "serde_big_array::BigArray")]
     lines: [CacheLine; 256],
     /// Cache hit counter for statistics
     hits: u64,
@@ -234,6 +235,7 @@ impl InstructionCache {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct DataCache {
     /// 1KB scratchpad RAM
+    #[serde(with = "serde_big_array::BigArray")]
     scratchpad: [u8; 1024],
     /// Whether scratchpad is enabled
     enabled: bool,
