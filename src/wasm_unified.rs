@@ -376,9 +376,12 @@ impl PsxEmulator {
                 // Try to boot from system.cnf or other boot methods
                 console_log!("No direct executable found, attempting ISO9660 boot");
                 
-                // For now, we'll just initialize the PSX with the disc loaded
-                // The actual disc emulation would need more work
-                self.psx.reset();
+                // Initialize the disc system without resetting
+                // The BIOS will handle the boot process
+                self.psx.init_with_disc().map_err(|e| {
+                    console_error!("Failed to initialize disc: {:?}", e);
+                    JsValue::from_str(&format!("Failed to initialize disc: {:?}", e))
+                })?;
             }
         }
         
