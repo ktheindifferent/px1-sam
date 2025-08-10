@@ -4,6 +4,7 @@ pub mod bios;
 pub mod cd;
 pub mod cop0;
 pub mod cpu;
+pub mod cpu_instructions;
 #[cfg(feature = "debugger")]
 pub mod debugger;
 mod cache;
@@ -15,6 +16,7 @@ mod irq;
 mod link_cable;
 mod mdec;
 mod memory_control;
+pub mod memory_map;
 pub mod pad_memcard;
 mod spu;
 mod sync;
