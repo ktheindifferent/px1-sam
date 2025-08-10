@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
-path = "src/wasm_enhanced.rs"
+path = "src/wasm_unified.rs"
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -32,6 +32,11 @@ features = [
   "ImageData",
   "KeyboardEvent",
   "AudioContext",
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "AudioDestinationNode",
+  "AudioNode",
+  "BaseAudioContext",
   "Gamepad",
   "GamepadButton",
 ]

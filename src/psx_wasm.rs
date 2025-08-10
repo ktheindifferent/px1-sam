@@ -456,4 +456,29 @@ impl Addressable for Psx {
             }
         }
     }
+    
+    pub fn init_with_disc(&mut self) -> Result<()> {
+        // Initialize PSX with a disc loaded
+        // This would normally set up the CD-ROM subsystem
+        // For now, just reset the system
+        self.reset()
+    }
+    
+    pub fn reset(&mut self) -> Result<()> {
+        // Reset CPU state
+        self.cpu = Cpu::new();
+        
+        // Reset other components
+        self.gpu = Gpu::new();
+        self.spu = Spu::new();
+        self.dma = Dma::new();
+        self.timers = Timers::new();
+        self.irq = Irq::new();
+        self.pad_memcard = PadMemCard::new();
+        
+        // Set PC to BIOS entry point
+        self.cpu.pc = 0xbfc00000;
+        
+        Ok(())
+    }
 }

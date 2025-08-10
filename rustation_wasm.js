@@ -117,71 +117,6 @@ function getClampedArrayU8FromWasm0(ptr, len) {
     return getUint8ClampedArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
-function debugString(val) {
-    // primitive types
-    const type = typeof val;
-    if (type == 'number' || type == 'boolean' || val == null) {
-        return  `${val}`;
-    }
-    if (type == 'string') {
-        return `"${val}"`;
-    }
-    if (type == 'symbol') {
-        const description = val.description;
-        if (description == null) {
-            return 'Symbol';
-        } else {
-            return `Symbol(${description})`;
-        }
-    }
-    if (type == 'function') {
-        const name = val.name;
-        if (typeof name == 'string' && name.length > 0) {
-            return `Function(${name})`;
-        } else {
-            return 'Function';
-        }
-    }
-    // objects
-    if (Array.isArray(val)) {
-        const length = val.length;
-        let debug = '[';
-        if (length > 0) {
-            debug += debugString(val[0]);
-        }
-        for(let i = 1; i < length; i++) {
-            debug += ', ' + debugString(val[i]);
-        }
-        debug += ']';
-        return debug;
-    }
-    // Test for built-in
-    const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
-    let className;
-    if (builtInMatches && builtInMatches.length > 1) {
-        className = builtInMatches[1];
-    } else {
-        // Failed to match the standard '[object ClassName]'
-        return toString.call(val);
-    }
-    if (className == 'Object') {
-        // we're a user defined class or Object
-        // JSON.stringify avoids problems with cycles, and is generally much
-        // easier than looping through ownProperties of `val`.
-        try {
-            return 'Object(' + JSON.stringify(val) + ')';
-        } catch (_) {
-            return 'Object';
-        }
-    }
-    // errors
-    if (val instanceof Error) {
-        return `${val.name}: ${val.message}\n${val.stack}`;
-    }
-    // TODO we could test for more things here, like `Set`s and `Map`s.
-    return className;
-}
-
 function takeFromExternrefTable0(idx) {
     const value = wasm.__wbindgen_export_2.get(idx);
     wasm.__externref_table_dealloc(idx);
@@ -198,20 +133,6 @@ function passArray8ToWasm0(arg, malloc) {
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
-}
-
-let cachedFloat32ArrayMemory0 = null;
-
-function getFloat32ArrayMemory0() {
-    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
-        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
-    }
-    return cachedFloat32ArrayMemory0;
-}
-
-function getArrayF32FromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
 const InputStateFinalization = (typeof FinalizationRegistry === 'undefined')
@@ -254,10 +175,18 @@ export class InputState {
         wasm.inputstate_set_key(this.__wbg_ptr, keycode, pressed);
     }
     /**
-     * @param {Gamepad} gamepad
+     * @param {number} button
+     * @param {boolean} pressed
      */
-    update_gamepad(gamepad) {
-        wasm.inputstate_update_gamepad(this.__wbg_ptr, gamepad);
+    set_gamepad_button(button, pressed) {
+        wasm.inputstate_set_gamepad_button(this.__wbg_ptr, button, pressed);
+    }
+    /**
+     * @param {number} axis
+     * @param {number} value
+     */
+    set_gamepad_axis(axis, value) {
+        wasm.inputstate_set_gamepad_axis(this.__wbg_ptr, axis, value);
     }
 }
 
@@ -266,6 +195,14 @@ const PsxEmulatorFinalization = (typeof FinalizationRegistry === 'undefined')
     : new FinalizationRegistry(ptr => wasm.__wbg_psxemulator_free(ptr >>> 0, 1));
 
 export class PsxEmulator {
+
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(PsxEmulator.prototype);
+        obj.__wbg_ptr = ptr;
+        PsxEmulatorFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
 
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
@@ -279,18 +216,15 @@ export class PsxEmulator {
         wasm.__wbg_psxemulator_free(ptr, 0);
     }
     /**
-     * @param {string} canvas_id
+     * @param {HTMLCanvasElement} canvas
+     * @returns {PsxEmulator}
      */
-    constructor(canvas_id) {
-        const ptr0 = passStringToWasm0(canvas_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.psxemulator_new(ptr0, len0);
+    static new(canvas) {
+        const ret = wasm.psxemulator_new(canvas);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
-        this.__wbg_ptr = ret[0] >>> 0;
-        PsxEmulatorFinalization.register(this, this.__wbg_ptr, this);
-        return this;
+        return PsxEmulator.__wrap(ret[0]);
     }
     /**
      * @param {Uint8Array} bios_data
@@ -305,11 +239,28 @@ export class PsxEmulator {
     }
     /**
      * @param {Uint8Array} game_data
+     * @param {string} filename
      */
-    load_game(game_data) {
+    load_game(game_data, filename) {
         const ptr0 = passArray8ToWasm0(game_data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.psxemulator_load_game(this.__wbg_ptr, ptr0, len0);
+        const ptr1 = passStringToWasm0(filename, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.psxemulator_load_game(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @param {Uint8Array} cue_data
+     * @param {Uint8Array} bin_data
+     */
+    load_game_with_bin(cue_data, bin_data) {
+        const ptr0 = passArray8ToWasm0(cue_data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(bin_data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.psxemulator_load_game_with_bin(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
@@ -333,6 +284,12 @@ export class PsxEmulator {
         const ret = wasm.psxemulator_is_running(this.__wbg_ptr);
         return ret !== 0;
     }
+    reset() {
+        const ret = wasm.psxemulator_reset(this.__wbg_ptr);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
     /**
      * @param {KeyboardEvent} event
      * @param {boolean} pressed
@@ -341,22 +298,10 @@ export class PsxEmulator {
         wasm.psxemulator_handle_keyboard_event(this.__wbg_ptr, event, pressed);
     }
     /**
-     * @returns {Uint8Array}
+     * @param {Gamepad} gamepad
      */
-    get_frame_buffer() {
-        const ret = wasm.psxemulator_get_frame_buffer(this.__wbg_ptr);
-        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-        return v1;
-    }
-    /**
-     * @returns {Float32Array}
-     */
-    get_audio_buffer() {
-        const ret = wasm.psxemulator_get_audio_buffer(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+    handle_gamepad(gamepad) {
+        wasm.psxemulator_handle_gamepad(this.__wbg_ptr, gamepad);
     }
     /**
      * @returns {Uint8Array}
@@ -377,36 +322,6 @@ export class PsxEmulator {
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
-    }
-    reset() {
-        wasm.psxemulator_reset(this.__wbg_ptr);
-    }
-    /**
-     * @param {number} _volume
-     */
-    set_volume(_volume) {
-        wasm.psxemulator_set_volume(this.__wbg_ptr, _volume);
-    }
-    /**
-     * @returns {string}
-     */
-    get_debug_info() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.psxemulator_get_debug_info(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * @param {Gamepad} gamepad
-     */
-    update_gamepad_state(gamepad) {
-        wasm.psxemulator_update_gamepad_state(this.__wbg_ptr, gamepad);
     }
 }
 
@@ -467,10 +382,6 @@ function __wbg_get_imports() {
         const ret = arg0.getContext(getStringFromWasm0(arg1, arg2));
         return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
     }, arguments) };
-    imports.wbg.__wbg_getElementById_f827f0d6648718a8 = function(arg0, arg1, arg2) {
-        const ret = arg0.getElementById(getStringFromWasm0(arg1, arg2));
-        return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-    };
     imports.wbg.__wbg_get_b9b93047fe3cf45b = function(arg0, arg1) {
         const ret = arg0[arg1 >>> 0];
         return ret;
@@ -493,16 +404,6 @@ function __wbg_get_imports() {
         let result;
         try {
             result = arg0 instanceof GamepadButton;
-        } catch (_) {
-            result = false;
-        }
-        const ret = result;
-        return ret;
-    };
-    imports.wbg.__wbg_instanceof_HtmlCanvasElement_2ea67072a7624ac5 = function(arg0) {
-        let result;
-        try {
-            result = arg0 instanceof HTMLCanvasElement;
         } catch (_) {
             result = false;
         }
@@ -582,13 +483,6 @@ function __wbg_get_imports() {
         const ret = arg0.width;
         return ret;
     };
-    imports.wbg.__wbindgen_debug_string = function(arg0, arg1) {
-        const ret = debugString(arg1);
-        const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-        getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
-    };
     imports.wbg.__wbindgen_init_externref_table = function() {
         const table = wasm.__wbindgen_export_2;
         const offset = table.grow(4);
@@ -628,7 +522,6 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     __wbg_init.__wbindgen_wasm_module = module;
     cachedDataViewMemory0 = null;
-    cachedFloat32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     cachedUint8ClampedArrayMemory0 = null;
 
