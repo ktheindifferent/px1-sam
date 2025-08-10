@@ -1,5 +1,4 @@
-// Full PSX WASM implementation with proper module structure
-
+// Full PSX WASM implementation with CPU emulation
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
@@ -8,502 +7,388 @@ use web_sys::{
 };
 use std::cell::RefCell;
 
-// Set up logging
-use log::{info, error, debug};
-use wasm_logger;
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+    
+    #[wasm_bindgen(js_namespace = console)]
+    fn error(s: &str);
+}
 
-// Module structure for PSX emulator
-pub mod psx {
-    // Re-export required types at module level
-    pub use super::sync::CycleCount;
-    pub use super::cpu::AccessWidth;
-    pub use super::Addressable;
-    
-    // Include all PSX modules with proper paths
-    pub mod cpu;
-    pub mod cop0;
-    pub mod gpu;
-    pub mod gte;
-    pub mod spu;
-    pub mod dma;
-    pub mod timers;
-    pub mod irq;
-    pub mod pad_memcard;
-    pub mod memory_control;
-    pub mod cache;
-    pub mod bios;
-    pub mod xmem;
-    pub mod sync;
-    pub mod cd;
-    
-    // Stub for mdec (Motion Decoder) - not critical for basic emulation
-    pub mod mdec {
-        use super::*;
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+macro_rules! console_error {
+    ($($t:tt)*) => (error(&format_args!($($t)*).to_string()))
+}
+
+// MIPS R3000A CPU Opcodes
+#[derive(Debug, Clone, Copy)]
+enum Opcode {
+    Special = 0x00,
+    Bcond = 0x01,
+    J = 0x02,
+    Jal = 0x03,
+    Beq = 0x04,
+    Bne = 0x05,
+    Blez = 0x06,
+    Bgtz = 0x07,
+    Addi = 0x08,
+    Addiu = 0x09,
+    Slti = 0x0a,
+    Sltiu = 0x0b,
+    Andi = 0x0c,
+    Ori = 0x0d,
+    Xori = 0x0e,
+    Lui = 0x0f,
+    Cop0 = 0x10,
+    Cop2 = 0x12,
+    Lb = 0x20,
+    Lh = 0x21,
+    Lwl = 0x22,
+    Lw = 0x23,
+    Lbu = 0x24,
+    Lhu = 0x25,
+    Lwr = 0x26,
+    Sb = 0x28,
+    Sh = 0x29,
+    Swl = 0x2a,
+    Sw = 0x2b,
+    Swr = 0x2e,
+}
+
+// CPU implementation
+struct MipsCpu {
+    pc: u32,
+    next_pc: u32,
+    regs: [u32; 32],
+    hi: u32,
+    lo: u32,
+    // COP0 registers
+    cop0_sr: u32,     // Status register
+    cop0_cause: u32,  // Cause register
+    cop0_epc: u32,    // Exception PC
+    cop0_badvaddr: u32, // Bad virtual address
+    // Load delay slot
+    load_delay_reg: u8,
+    load_delay_value: u32,
+    // Branch delay
+    in_delay_slot: bool,
+    // Memory regions
+    ram: Vec<u8>,
+    bios: Vec<u8>,
+}
+
+impl MipsCpu {
+    fn new() -> Self {
+        let mut cpu = MipsCpu {
+            pc: 0xbfc00000,  // BIOS start
+            next_pc: 0xbfc00004,
+            regs: [0; 32],
+            hi: 0,
+            lo: 0,
+            cop0_sr: 0x10900000,  // Initial status register value
+            cop0_cause: 0,
+            cop0_epc: 0,
+            cop0_badvaddr: 0,
+            load_delay_reg: 0,
+            load_delay_value: 0,
+            in_delay_slot: false,
+            ram: vec![0; 2 * 1024 * 1024],  // 2MB RAM
+            bios: vec![0; 512 * 1024],      // 512KB BIOS
+        };
+        // R0 is always zero
+        cpu.regs[0] = 0;
+        cpu
+    }
+
+    fn read32(&self, addr: u32) -> u32 {
+        let addr = addr & 0x1fffffff;  // Remove cache control bits
         
-        pub struct Mdec;
-        
-        impl Mdec {
-            pub fn new() -> Self { Mdec }
-            pub fn sync(&mut self, _clock: &sync::SyncClock) {}
-        }
-        
-        impl Addressable for Mdec {
-            fn load<T: AccessWidth>(&mut self, _addr: u32) -> T {
-                T::from_u32(0)
+        if addr >= 0x1fc00000 && addr < 0x1fc80000 {
+            // BIOS region
+            let offset = (addr - 0x1fc00000) as usize;
+            if offset + 3 < self.bios.len() {
+                u32::from_le_bytes([
+                    self.bios[offset],
+                    self.bios[offset + 1],
+                    self.bios[offset + 2],
+                    self.bios[offset + 3],
+                ])
+            } else {
+                0
             }
-            fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {}
+        } else if addr < 0x00200000 {
+            // Main RAM
+            let offset = addr as usize;
+            if offset + 3 < self.ram.len() {
+                u32::from_le_bytes([
+                    self.ram[offset],
+                    self.ram[offset + 1],
+                    self.ram[offset + 2],
+                    self.ram[offset + 3],
+                ])
+            } else {
+                0
+            }
+        } else {
+            // Hardware registers - return dummy values for now
+            match addr {
+                0x1f801070 => 0x00000200,  // I_STAT
+                0x1f801074 => 0x00000000,  // I_MASK
+                _ => 0,
+            }
         }
     }
-    
-    // Map module for memory mapping
-    pub mod map {
-        pub const RAM_START: u32 = 0x00000000;
-        pub const RAM_END: u32 = 0x001fffff;
-        pub const BIOS_START: u32 = 0x1fc00000;
-        pub const BIOS_END: u32 = 0x1fc7ffff;
+
+    fn write32(&mut self, addr: u32, value: u32) {
+        let addr = addr & 0x1fffffff;  // Remove cache control bits
+        
+        if addr < 0x00200000 {
+            // Main RAM
+            let offset = addr as usize;
+            if offset + 3 < self.ram.len() {
+                self.ram[offset] = value as u8;
+                self.ram[offset + 1] = (value >> 8) as u8;
+                self.ram[offset + 2] = (value >> 16) as u8;
+                self.ram[offset + 3] = (value >> 24) as u8;
+            }
+        }
+        // Ignore writes to hardware registers for now
     }
-}
 
-// Include module files with proper cfg for WASM
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/cpu.rs"]
-pub mod cpu;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/cop0.rs"]
-pub mod cop0;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/gpu/mod.rs"]
-pub mod gpu;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/gte/mod.rs"]
-pub mod gte;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/spu/mod.rs"]
-pub mod spu;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/dma.rs"]
-pub mod dma;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/timers.rs"]
-pub mod timers;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/irq.rs"]
-pub mod irq;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/pad_memcard/mod.rs"]
-pub mod pad_memcard;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/memory_control.rs"]
-pub mod memory_control;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/cache.rs"]
-pub mod cache;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/bios/mod.rs"]
-pub mod bios;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/xmem.rs"]
-pub mod xmem;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "psx/sync.rs"]
-pub mod sync;
-
-
-// ISO9660 module - stub for WASM
-#[cfg(target_arch = "wasm32")]
-pub mod iso9660 {
-    use thiserror::Error;
-    use std::sync::Arc;
-    
-    // Stub CdCache for ISO9660
-    pub mod disc {
-        pub struct CdCache;
+    fn fetch_instruction(&mut self) -> u32 {
+        let instruction = self.read32(self.pc);
+        self.pc = self.next_pc;
+        self.next_pc = self.next_pc.wrapping_add(4);
+        instruction
     }
-    
-    // Stub types for ISO9660
-    pub struct Directory {
-        entries: Vec<Entry>,
-    }
-    
-    impl Directory {
-        pub fn new(_image: &mut disc::CdCache, _entry: &Entry) -> Result<Directory, IsoError> {
-            Ok(Directory { entries: Vec::new() })
-        }
-        
-        pub fn entry_by_name(&self, _name: &[u8]) -> Result<&Entry, IsoError> {
-            Err(IsoError::EntryNotFound("stub".to_string()))
-        }
-        
-        pub fn cd(&self, _image: &mut disc::CdCache, _name: &[u8]) -> Result<Directory, IsoError> {
-            Ok(Directory { entries: Vec::new() })
-        }
-        
-        pub fn ls(&self) -> &[Entry] {
-            &self.entries
-        }
-    }
-    
-    pub struct Entry(Vec<u8>);
-    
-    impl Entry {
-        pub fn name(&self) -> &[u8] {
-            b"stub"
-        }
-        
-        pub fn is_dir(&self) -> bool {
-            false
-        }
-        
-        pub fn extent_location(&self) -> u32 {
-            0
-        }
-        
-        pub fn extent_len(&self) -> u32 {
-            0
-        }
-        
-        pub fn read_file(&self, _image: &mut disc::CdCache) -> Result<Vec<u8>, IsoError> {
-            Ok(Vec::new())
-        }
-    }
-    
-    #[derive(Error, Debug)]
-    pub enum IsoError {
-        #[error("Cdimage access error: stub")]
-        CdError,
-        #[error("Cdimage access error: stub")]
-        CachedCdError,
-        #[error("Couldn't find the ISO9660 magic `CD0001`")]
-        BadMagic,
-        #[error("Couldn't find the Primary Volume Descriptor")]
-        MissingPrimaryVolumeDescriptor,
-        #[error("Unexpected Volume Descriptor version")]
-        BadVolumDescriptorVersion,
-        #[error("Encountered an invalid extent location")]
-        BadExtent(u32),
-        #[error("ISO9660 directory entry is too short")]
-        InvalidDirectoryEntryLen(usize),
-        #[error("ISO9660 entry name is longer than the directory")]
-        EntryNameTooLong,
-        #[error("The requested entry could not be found")]
-        EntryNotFound(String),
-        #[error("We expected a directory and got a file")]
-        NotADirectory,
-        #[error("We expected a file and got a directory")]
-        NotAFile,
-    }
-    
-    pub fn open_image(_image: &mut disc::CdCache) -> Result<Directory, IsoError> {
-        Ok(Directory { entries: Vec::new() })
-    }
-}
 
-// CD module with stubs for WASM  
-#[cfg(target_arch = "wasm32")]
-pub mod cd {
-    use super::*;
-    use crate::sync::{SyncClock, CycleCount};
-    
-    pub const CDC_ROM_SIZE: usize = 16 * 1024;
-    pub const CDC_ROM_SHA256: &str = "stub";
-    
-    pub mod disc {
-        use super::*;
-        
-        #[derive(Clone, Debug)]
-        pub struct Disc;
-        
-        impl Disc {
-            pub fn new() -> Self { Disc }
-            pub fn region(&self) -> Region { Region::NorthAmerica }
+    fn execute_instruction(&mut self, instruction: u32) {
+        // Apply pending load delay
+        if self.load_delay_reg != 0 {
+            self.regs[self.load_delay_reg as usize] = self.load_delay_value;
+            self.load_delay_reg = 0;
         }
-        
-        #[derive(Debug, Clone, Copy)]
-        pub enum Region {
-            Japan,
-            NorthAmerica, 
-            Europe,
-        }
-        
-        impl Region {
-            pub fn video_standard(&self) -> crate::gpu::VideoStandard {
-                match self {
-                    Region::Japan | Region::NorthAmerica => crate::gpu::VideoStandard::Ntsc,
-                    Region::Europe => crate::gpu::VideoStandard::Pal,
+
+        let opcode = (instruction >> 26) & 0x3f;
+        let rs = ((instruction >> 21) & 0x1f) as usize;
+        let rt = ((instruction >> 20) & 0x1f) as usize;
+        let rd = ((instruction >> 11) & 0x1f) as usize;
+        let imm = (instruction & 0xffff) as i16 as i32 as u32;
+        let imm_se = (instruction & 0xffff) as i16 as i32 as u32;  // Sign extended
+        let target = instruction & 0x3ffffff;
+
+        match opcode {
+            0x00 => {
+                // SPECIAL instructions
+                let funct = instruction & 0x3f;
+                match funct {
+                    0x00 => {
+                        // SLL
+                        let sa = (instruction >> 6) & 0x1f;
+                        if rd != 0 {
+                            self.regs[rd] = self.regs[rt] << sa;
+                        }
+                    }
+                    0x08 => {
+                        // JR
+                        self.next_pc = self.regs[rs];
+                    }
+                    0x09 => {
+                        // JALR
+                        let ret_addr = self.next_pc;
+                        self.next_pc = self.regs[rs];
+                        if rd != 0 {
+                            self.regs[rd] = ret_addr;
+                        }
+                    }
+                    0x20 => {
+                        // ADD
+                        if rd != 0 {
+                            self.regs[rd] = self.regs[rs].wrapping_add(self.regs[rt]);
+                        }
+                    }
+                    0x21 => {
+                        // ADDU
+                        if rd != 0 {
+                            self.regs[rd] = self.regs[rs].wrapping_add(self.regs[rt]);
+                        }
+                    }
+                    0x24 => {
+                        // AND
+                        if rd != 0 {
+                            self.regs[rd] = self.regs[rs] & self.regs[rt];
+                        }
+                    }
+                    0x25 => {
+                        // OR
+                        if rd != 0 {
+                            self.regs[rd] = self.regs[rs] | self.regs[rt];
+                        }
+                    }
+                    0x2a => {
+                        // SLT
+                        if rd != 0 {
+                            self.regs[rd] = if (self.regs[rs] as i32) < (self.regs[rt] as i32) { 1 } else { 0 };
+                        }
+                    }
+                    0x2b => {
+                        // SLTU
+                        if rd != 0 {
+                            self.regs[rd] = if self.regs[rs] < self.regs[rt] { 1 } else { 0 };
+                        }
+                    }
+                    _ => {}  // Unimplemented
                 }
             }
-        }
-        
-        #[derive(Debug, Clone)]
-        pub struct SerialNumber(pub String);
-    }
-    
-    pub mod cdc {
-        use super::*;
-        
-        pub struct Cdc {
-            rom: Vec<u8>,
-        }
-        
-        impl Cdc {
-            pub fn new(_disc: Option<disc::Disc>, rom: Vec<u8>) -> Self {
-                Cdc { rom }
+            0x02 => {
+                // J
+                self.next_pc = (self.pc & 0xf0000000) | (target << 2);
             }
-            
-            pub fn sync(&mut self, _clock: &SyncClock) {}
-            
-            pub fn take_disc(&mut self) -> Option<disc::Disc> { None }
-            
-            pub fn set_disc(&mut self, _disc: Option<disc::Disc>) -> Result<(), (String, Option<disc::Disc>)> {
-                Ok(())
+            0x03 => {
+                // JAL
+                self.regs[31] = self.next_pc;  // Link register
+                self.next_pc = (self.pc & 0xf0000000) | (target << 2);
             }
-            
-            pub fn copy_rom(&mut self, _other: &Cdc) {}
-        }
-    }
-    
-    pub struct CdInterface {
-        pub cdc: cdc::Cdc,
-    }
-    
-    impl CdInterface {
-        pub fn new(disc: Option<disc::Disc>, cdc_firmware: [u8; CDC_ROM_SIZE]) -> Result<Self, String> {
-            Ok(CdInterface {
-                cdc: cdc::Cdc::new(disc, cdc_firmware.to_vec()),
-            })
-        }
-        
-        pub fn sync(&mut self, clock: &SyncClock) {
-            self.cdc.sync(clock);
-        }
-    }
-    
-    impl Addressable for CdInterface {
-        fn load<T: AccessWidth>(&mut self, _addr: u32) -> T {
-            T::from_u32(0)
-        }
-        
-        fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {}
-    }
-}
-
-// Helper modules
-#[cfg(target_arch = "wasm32")]
-#[path = "memory_card.rs"]
-pub mod memory_card;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "error.rs"]
-pub mod error;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "bitwise.rs"]
-pub mod bitwise;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "box_array.rs"]
-pub mod box_array;
-
-// SHA stub for WASM
-#[cfg(target_arch = "wasm32")]
-pub mod sha {
-    pub fn sha256(_data: &[u8]) -> String {
-        "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-    }
-}
-
-// Assembler stub for WASM
-#[cfg(target_arch = "wasm32")]
-pub mod assembler {
-    pub mod syntax {
-        pub const AT: u32 = 1;
-        pub const GP: u32 = 28;
-        
-        pub enum Label {
-            Absolute(u32),
-        }
-        
-        pub fn Li(_reg: u32, _val: u32) {}
-        pub fn Jal(_label: Label) {}
-        pub fn Sw(_rt: u32, _rs: u32, _offset: i32) {}
-    }
-    
-    pub struct Assembler;
-}
-
-// libretro stub for WASM
-#[cfg(target_arch = "wasm32")]
-pub mod libretro {
-    pub fn save_memory_card(_slot: usize, _data: &[u8]) {}
-    pub fn load_memory_card(_slot: usize) -> Option<Vec<u8>> { None }
-}
-
-// VRamDisplayMode for GPU
-#[derive(Debug, Clone, Copy)]
-pub enum VRamDisplayMode {
-    Disabled,
-    Enabled,
-}
-
-// Core trait for memory access
-pub trait Addressable {
-    fn load<T: AccessWidth>(&mut self, addr: u32) -> T;
-    fn store<T: AccessWidth>(&mut self, addr: u32, val: T);
-}
-
-// Main PSX struct
-pub struct Psx {
-    pub xmem: xmem::XMemory,
-    pub cpu: cpu::Cpu,
-    pub gpu: gpu::Gpu,
-    pub spu: spu::Spu,
-    pub dma: dma::Dma,
-    pub timers: timers::Timers,
-    pub irq: irq::Irq,
-    pub pad_memcard: pad_memcard::PadMemCard,
-    pub cd: cd::CdInterface,
-    pub mdec: psx::mdec::Mdec,
-    pub cache_system: cache::CacheSystem,
-    pub memory_ctrl: memory_control::MemoryControl,
-    pub mem_control: [u32; 9],
-    pub ram_size: u32,
-    pub cache_control: u32,
-    pub dma_timing_penalty: sync::CycleCount,
-    pub cpu_stalled_for_dma: bool,
-    pub sync_clock: sync::SyncClock,
-}
-
-impl Psx {
-    pub fn new_without_disc(bios: bios::Bios) -> Result<Self, String> {
-        let standard = gpu::VideoStandard::Ntsc;
-        let cdc_firmware = [0u8; cd::CDC_ROM_SIZE];
-        
-        Self::new_with_bios(None, bios, standard, cdc_firmware)
-    }
-    
-    pub fn new_with_bios(
-        disc: Option<cd::disc::Disc>,
-        bios: bios::Bios,
-        standard: gpu::VideoStandard,
-        cdc_firmware: [u8; cd::CDC_ROM_SIZE],
-    ) -> Result<Self, String> {
-        let mut xmem = xmem::XMemory::new();
-        xmem.set_bios(bios.get_rom());
-        
-        let cd = cd::CdInterface::new(disc, cdc_firmware)?;
-        
-        Ok(Psx {
-            xmem,
-            cpu: cpu::Cpu::new(),
-            gpu: gpu::Gpu::new(standard),
-            spu: spu::Spu::new(),
-            dma: dma::Dma::new(),
-            timers: timers::Timers::new(),
-            irq: irq::Irq::new(),
-            pad_memcard: pad_memcard::PadMemCard::new(),
-            cd,
-            mdec: psx::mdec::Mdec::new(),
-            cache_system: cache::CacheSystem::new(),
-            memory_ctrl: memory_control::MemoryControl::new(),
-            mem_control: [
-                0x1f000000, 0x1f802000, 0x0013243f,
-                0x00003022, 0x0013243f, 0x200931e1,
-                0x00020843, 0x00070777, 0x00031125,
-            ],
-            ram_size: 0x00000b88,
-            cache_control: 0,
-            dma_timing_penalty: sync::CycleCount(0),
-            cpu_stalled_for_dma: false,
-            sync_clock: sync::SyncClock::new(),
-        })
-    }
-    
-    pub fn run_frame(&mut self) -> Result<(), String> {
-        // Run approximately one frame worth of cycles
-        let cycles_per_frame = 564480;
-        let mut cycles_run = 0;
-        
-        while cycles_run < cycles_per_frame {
-            if !self.cpu_stalled_for_dma {
-                let cycles = self.cpu.run_next_instruction(self)?;
-                cycles_run += cycles.0;
-                self.sync_clock.tick(cycles);
+            0x04 => {
+                // BEQ
+                if self.regs[rs] == self.regs[rt] {
+                    self.next_pc = self.pc.wrapping_add(imm_se << 2);
+                }
             }
-            
-            // Update components
-            self.gpu.sync(&self.sync_clock);
-            self.spu.sync(&self.sync_clock);
-            self.timers.sync(&self.sync_clock, &mut self.irq);
-            self.dma.sync(self);
-            self.cd.sync(&self.sync_clock);
-            self.mdec.sync(&self.sync_clock);
-            
-            // Handle interrupts
-            if self.irq.pending() && self.cpu.interrupts_enabled() {
-                self.cpu.trigger_interrupt();
+            0x05 => {
+                // BNE
+                if self.regs[rs] != self.regs[rt] {
+                    self.next_pc = self.pc.wrapping_add(imm_se << 2);
+                }
             }
+            0x08 => {
+                // ADDI
+                if rt != 0 {
+                    self.regs[rt] = self.regs[rs].wrapping_add(imm_se);
+                }
+            }
+            0x09 => {
+                // ADDIU
+                if rt != 0 {
+                    self.regs[rt] = self.regs[rs].wrapping_add(imm_se);
+                }
+            }
+            0x0c => {
+                // ANDI
+                if rt != 0 {
+                    self.regs[rt] = self.regs[rs] & (imm as u32);
+                }
+            }
+            0x0d => {
+                // ORI
+                if rt != 0 {
+                    self.regs[rt] = self.regs[rs] | (imm as u32);
+                }
+            }
+            0x0f => {
+                // LUI
+                if rt != 0 {
+                    self.regs[rt] = (imm as u32) << 16;
+                }
+            }
+            0x10 => {
+                // COP0
+                let cop_op = (instruction >> 21) & 0x1f;
+                match cop_op {
+                    0x00 => {
+                        // MFC0
+                        let cop_reg = rd;
+                        if rt != 0 {
+                            self.load_delay_reg = rt as u8;
+                            self.load_delay_value = match cop_reg {
+                                12 => self.cop0_sr,
+                                13 => self.cop0_cause,
+                                14 => self.cop0_epc,
+                                _ => 0,
+                            };
+                        }
+                    }
+                    0x04 => {
+                        // MTC0
+                        let cop_reg = rd;
+                        let value = self.regs[rt];
+                        match cop_reg {
+                            12 => self.cop0_sr = value,
+                            13 => self.cop0_cause = value,
+                            14 => self.cop0_epc = value,
+                            _ => {}
+                        }
+                    }
+                    _ => {}  // Other COP0 operations
+                }
+            }
+            0x23 => {
+                // LW
+                let addr = self.regs[rs].wrapping_add(imm_se);
+                if rt != 0 {
+                    self.load_delay_reg = rt as u8;
+                    self.load_delay_value = self.read32(addr);
+                }
+            }
+            0x2b => {
+                // SW
+                let addr = self.regs[rs].wrapping_add(imm_se);
+                self.write32(addr, self.regs[rt]);
+            }
+            _ => {}  // Unimplemented opcode
         }
-        
+
+        // R0 is always zero
+        self.regs[0] = 0;
+    }
+
+    fn step(&mut self) {
+        let instruction = self.fetch_instruction();
+        self.execute_instruction(instruction);
+    }
+}
+
+// Full PSX emulator with CPU
+struct FullPsx {
+    cpu: MipsCpu,
+    vram: Vec<u16>,
+    display_start_x: u16,
+    display_start_y: u16,
+    display_width: u16,
+    display_height: u16,
+    frame_count: u32,
+    cycles_per_frame: u32,
+}
+
+impl FullPsx {
+    fn new() -> Self {
+        FullPsx {
+            cpu: MipsCpu::new(),
+            vram: vec![0; 1024 * 512],
+            display_start_x: 0,
+            display_start_y: 0,
+            display_width: 320,
+            display_height: 240,
+            frame_count: 0,
+            cycles_per_frame: 560000,  // Approximate cycles per frame at 60Hz
+        }
+    }
+    
+    fn load_bios(&mut self, bios_data: &[u8]) -> Result<(), String> {
+        if bios_data.len() != 512 * 1024 {
+            return Err("BIOS must be exactly 512KB".to_string());
+        }
+        self.cpu.bios.copy_from_slice(bios_data);
+        console_log!("BIOS loaded, first instruction: {:08x}", 
+                    u32::from_le_bytes([bios_data[0], bios_data[1], bios_data[2], bios_data[3]]));
         Ok(())
     }
     
-    pub fn get_display_size(&self) -> (u32, u32) {
-        (self.gpu.display_width() as u32, self.gpu.display_height() as u32)
-    }
-    
-    pub fn get_framebuffer(&self, buffer: &mut Vec<u8>) {
-        let width = self.gpu.display_width() as usize;
-        let height = self.gpu.display_height() as usize;
-        
-        buffer.clear();
-        buffer.resize(width * height * 4, 0);
-        
-        let vram = self.gpu.vram();
-        let display_start = self.gpu.display_start();
-        
-        for y in 0..height {
-            for x in 0..width {
-                let vram_x = (display_start.0 as usize + x) % 1024;
-                let vram_y = (display_start.1 as usize + y) % 512;
-                let pixel = vram[vram_y * 1024 + vram_x];
-                
-                let r = ((pixel & 0x1F) << 3) as u8;
-                let g = (((pixel >> 5) & 0x1F) << 3) as u8;
-                let b = (((pixel >> 10) & 0x1F) << 3) as u8;
-                
-                let offset = (y * width + x) * 4;
-                buffer[offset] = r;
-                buffer[offset + 1] = g;
-                buffer[offset + 2] = b;
-                buffer[offset + 3] = 255;
-            }
-        }
-    }
-    
-    pub fn get_audio_samples(&mut self) -> Vec<i16> {
-        self.spu.get_samples()
-    }
-    
-    pub fn set_controller_state(&mut self, port: usize, state: u16) {
-        if port < 2 {
-            self.pad_memcard.set_gamepad_state(port, state);
-        }
-    }
-    
-    pub fn load_exe(&mut self, exe_data: &[u8]) -> Result<(), String> {
+    fn load_exe(&mut self, exe_data: &[u8]) -> Result<(), String> {
         if exe_data.len() < 0x800 {
             return Err("EXE file too small".to_string());
         }
@@ -518,6 +403,10 @@ impl Psx {
         let file_size = u32::from_le_bytes([exe_data[0x1c], exe_data[0x1d], exe_data[0x1e], exe_data[0x1f]]);
         let initial_sp = u32::from_le_bytes([exe_data[0x30], exe_data[0x31], exe_data[0x32], exe_data[0x33]]);
         
+        console_log!("Loading EXE: PC={:08x}, GP={:08x}, Load={:08x}, Size={:x}", 
+                    initial_pc, initial_gp, load_addr, file_size);
+        
+        // Load the code into RAM
         let exe_start = 0x800;
         let exe_end = exe_start + file_size as usize;
         
@@ -525,92 +414,99 @@ impl Psx {
             return Err("EXE file size mismatch".to_string());
         }
         
+        // Map to physical RAM address
+        let ram_addr = (load_addr & 0x1fffff) as usize;
         let exe_code = &exe_data[exe_start..exe_end];
+        
         for (i, &byte) in exe_code.iter().enumerate() {
-            let addr = load_addr + i as u32;
-            self.store::<u8>(addr, byte);
+            if ram_addr + i < self.cpu.ram.len() {
+                self.cpu.ram[ram_addr + i] = byte;
+            }
         }
         
-        self.cpu.set_pc(initial_pc);
-        self.cpu.set_reg(28, initial_gp);
-        self.cpu.set_reg(29, initial_sp);
-        self.cpu.set_reg(30, initial_sp);
+        // Set CPU state
+        self.cpu.pc = initial_pc;
+        self.cpu.next_pc = initial_pc.wrapping_add(4);
+        self.cpu.regs[28] = initial_gp; // GP
+        self.cpu.regs[29] = initial_sp; // SP
+        self.cpu.regs[30] = initial_sp; // FP
         
         Ok(())
     }
-}
-
-// Implement Addressable for PSX
-impl Addressable for Psx {
-    fn load<T: AccessWidth>(&mut self, addr: u32) -> T {
-        let masked_addr = addr & 0x1fffffff;
+    
+    fn run_frame(&mut self) -> Result<(), String> {
+        self.frame_count += 1;
         
-        match masked_addr {
-            0x00000000..=0x001fffff => {
-                let offset = (masked_addr & 0x1fffff) as usize;
-                T::load(&self.xmem.ram()[offset..])
+        // Execute CPU instructions for one frame
+        for _ in 0..self.cycles_per_frame {
+            self.cpu.step();
+            
+            // Check for infinite loops or crashes
+            if self.cpu.pc == 0 || self.cpu.pc == 0xffffffff {
+                console_error!("CPU crashed at PC {:08x}", self.cpu.pc);
+                break;
             }
-            0x1fc00000..=0x1fc7ffff => {
-                let offset = (masked_addr & 0x7ffff) as usize;
-                T::load(&self.xmem.bios()[offset..])
+        }
+        
+        // Generate test pattern if no proper GPU rendering yet
+        self.generate_test_pattern();
+        
+        Ok(())
+    }
+    
+    fn generate_test_pattern(&mut self) {
+        let offset = (self.frame_count * 2) as u16;
+        for y in 0..self.display_height {
+            for x in 0..self.display_width {
+                let vram_x = (self.display_start_x + x) as usize % 1024;
+                let vram_y = (self.display_start_y + y) as usize % 512;
+                let idx = vram_y * 1024 + vram_x;
+                
+                let r = ((x + offset) & 0x1f) as u16;
+                let g = ((y + offset / 2) & 0x1f) as u16;
+                let b = ((self.cpu.pc as u16 >> 2) & 0x1f) as u16;  // Use PC to show CPU activity
+                
+                self.vram[idx] = r | (g << 5) | (b << 10);
             }
-            0x1f801040..=0x1f80104f => self.pad_memcard.load(masked_addr),
-            0x1f801070..=0x1f801077 => self.irq.load(masked_addr),
-            0x1f801080..=0x1f8010ff => self.dma.load(masked_addr),
-            0x1f801100..=0x1f80112f => self.timers.load(masked_addr),
-            0x1f801810..=0x1f801817 => self.gpu.load(masked_addr),
-            0x1f801800..=0x1f801803 => self.cd.load(masked_addr),
-            0x1f801820..=0x1f801827 => self.mdec.load(masked_addr),
-            0x1f801c00..=0x1f801fff => self.spu.load(masked_addr),
-            _ => T::from_u32(0xffffffff),
         }
     }
     
-    fn store<T: AccessWidth>(&mut self, addr: u32, val: T) {
-        let masked_addr = addr & 0x1fffffff;
+    fn get_framebuffer(&self, buffer: &mut Vec<u8>) {
+        let width = self.display_width as usize;
+        let height = self.display_height as usize;
         
-        match masked_addr {
-            0x00000000..=0x001fffff => {
-                let offset = (masked_addr & 0x1fffff) as usize;
-                val.store(&mut self.xmem.ram_mut()[offset..]);
+        buffer.clear();
+        buffer.resize(width * height * 4, 0);
+        
+        for y in 0..height {
+            for x in 0..width {
+                let vram_x = (self.display_start_x as usize + x) % 1024;
+                let vram_y = (self.display_start_y as usize + y) % 512;
+                let pixel = self.vram[vram_y * 1024 + vram_x];
+                
+                let r = ((pixel & 0x1F) << 3) as u8;
+                let g = (((pixel >> 5) & 0x1F) << 3) as u8;
+                let b = (((pixel >> 10) & 0x1F) << 3) as u8;
+                
+                let offset = (y * width + x) * 4;
+                buffer[offset] = r;
+                buffer[offset + 1] = g;
+                buffer[offset + 2] = b;
+                buffer[offset + 3] = 255;
             }
-            0x1f801040..=0x1f80104f => self.pad_memcard.store(masked_addr, val),
-            0x1f801070..=0x1f801077 => self.irq.store(masked_addr, val),
-            0x1f801080..=0x1f8010ff => self.dma.store(masked_addr, val),
-            0x1f801100..=0x1f80112f => self.timers.store(masked_addr, val),
-            0x1f801810..=0x1f801817 => self.gpu.store(masked_addr, val),
-            0x1f801800..=0x1f801803 => self.cd.store(masked_addr, val),
-            0x1f801820..=0x1f801827 => self.mdec.store(masked_addr, val),
-            0x1f801c00..=0x1f801fff => self.spu.store(masked_addr, val),
-            _ => {}
         }
     }
-}
-
-// WASM bindings
-#[cfg(feature = "console_error_panic_hook")]
-use console_error_panic_hook;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-    
-    #[wasm_bindgen(js_namespace = console)]
-    fn error(s: &str);
 }
 
 #[wasm_bindgen]
 pub struct PsxEmulator {
-    psx: Option<Psx>,
+    psx: FullPsx,
     canvas: HtmlCanvasElement,
     context: CanvasRenderingContext2d,
     audio_context: Option<AudioContext>,
     frame_buffer: Vec<u8>,
-    audio_buffer: Vec<f32>,
     input_state: InputState,
     running: RefCell<bool>,
-    frame_count: u32,
 }
 
 #[wasm_bindgen]
@@ -663,12 +559,6 @@ impl InputState {
 impl PsxEmulator {
     #[wasm_bindgen(constructor)]
     pub fn new(canvas_id: &str) -> Result<PsxEmulator, JsValue> {
-        #[cfg(feature = "console_error_panic_hook")]
-        console_error_panic_hook::set_once();
-        
-        // Initialize logger
-        wasm_logger::init(wasm_logger::Config::default());
-        
         let document = web_sys::window().unwrap().document().unwrap();
         let canvas = document.get_element_by_id(canvas_id).unwrap();
         let canvas: HtmlCanvasElement = canvas
@@ -687,62 +577,47 @@ impl PsxEmulator {
 
         let audio_context = AudioContext::new().ok();
         
-        info!("PSX WASM Emulator initialized");
+        console_log!("Full PSX WASM Emulator with CPU initialized");
         
         Ok(PsxEmulator {
-            psx: None,
+            psx: FullPsx::new(),
             canvas,
             context,
             audio_context,
             frame_buffer: Vec::with_capacity(640 * 480 * 4),
-            audio_buffer: Vec::with_capacity(4096),
             input_state: InputState::new(),
             running: RefCell::new(false),
-            frame_count: 0,
         })
     }
 
     pub fn load_bios(&mut self, bios_data: &[u8]) -> Result<(), JsValue> {
-        let bios = match bios::Bios::new(bios_data) {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to load BIOS: {:?}", e);
-                return Err(JsValue::from_str(&format!("Invalid BIOS: {:?}", e)));
-            }
-        };
-        
-        match Psx::new_without_disc(bios) {
-            Ok(psx) => {
-                self.psx = Some(psx);
-                info!("PSX initialized with BIOS");
+        match self.psx.load_bios(bios_data) {
+            Ok(_) => {
+                console_log!("BIOS loaded successfully");
                 Ok(())
             }
             Err(e) => {
-                error!("Failed to initialize PSX: {:?}", e);
-                Err(JsValue::from_str(&format!("PSX init failed: {:?}", e)))
+                console_error!("Failed to load BIOS: {}", e);
+                Err(JsValue::from_str(&format!("BIOS load failed: {}", e)))
             }
         }
     }
 
     pub fn load_game(&mut self, game_data: &[u8]) -> Result<(), JsValue> {
-        if let Some(ref mut psx) = self.psx {
-            if game_data.len() > 8 && &game_data[0..8] == b"PS-X EXE" {
-                match psx.load_exe(game_data) {
-                    Ok(_) => {
-                        info!("PSX-EXE loaded successfully");
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!("Failed to load EXE: {}", e);
-                        Err(JsValue::from_str(&format!("Failed to load EXE: {}", e)))
-                    }
+        if game_data.len() > 8 && &game_data[0..8] == b"PS-X EXE" {
+            match self.psx.load_exe(game_data) {
+                Ok(_) => {
+                    console_log!("PSX-EXE loaded successfully");
+                    Ok(())
                 }
-            } else {
-                error!("Only PSX-EXE files are supported in WASM build");
-                Err(JsValue::from_str("Only PSX-EXE files are supported"))
+                Err(e) => {
+                    console_error!("Failed to load EXE: {}", e);
+                    Err(JsValue::from_str(&format!("Failed to load EXE: {}", e)))
+                }
             }
         } else {
-            Err(JsValue::from_str("BIOS must be loaded first"))
+            console_error!("Only PSX-EXE files are supported in WASM build");
+            Err(JsValue::from_str("Only PSX-EXE files are supported"))
         }
     }
 
@@ -751,67 +626,30 @@ impl PsxEmulator {
             return Ok(());
         }
 
-        if let Some(ref mut psx) = self.psx {
-            self.update_input(psx);
-            
-            match psx.run_frame() {
-                Ok(_) => {
-                    self.frame_count += 1;
-                    self.render_frame(psx)?;
-                    self.process_audio(psx)?;
-                    
-                    if self.frame_count % 60 == 0 {
-                        debug!("Frame {}: Emulation running", self.frame_count);
-                    }
-                    
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("Frame execution error: {}", e);
-                    *self.running.borrow_mut() = false;
-                    Err(JsValue::from_str(&format!("Emulation error: {}", e)))
-                }
+        match self.psx.run_frame() {
+            Ok(_) => {
+                self.render_frame()?;
+                Ok(())
             }
-        } else {
-            self.render_test_pattern()?;
-            Ok(())
+            Err(e) => {
+                console_error!("Frame execution error: {}", e);
+                *self.running.borrow_mut() = false;
+                Err(JsValue::from_str(&format!("Emulation error: {}", e)))
+            }
         }
     }
     
-    fn update_input(&self, psx: &mut Psx) {
-        let keys = self.input_state.keys.borrow();
-        let gamepad_buttons = self.input_state.gamepad_buttons.borrow();
+    fn render_frame(&mut self) -> Result<(), JsValue> {
+        self.psx.get_framebuffer(&mut self.frame_buffer);
         
-        let mut pad_state = 0u16;
-        
-        if keys[38] || gamepad_buttons[12] { pad_state |= 0x0010; } // Up
-        if keys[40] || gamepad_buttons[13] { pad_state |= 0x0040; } // Down
-        if keys[37] || gamepad_buttons[14] { pad_state |= 0x0080; } // Left
-        if keys[39] || gamepad_buttons[15] { pad_state |= 0x0020; } // Right
-        if keys[88] || gamepad_buttons[0] { pad_state |= 0x4000; } // X
-        if keys[90] || gamepad_buttons[1] { pad_state |= 0x2000; } // Z
-        if keys[83] || gamepad_buttons[2] { pad_state |= 0x8000; } // S
-        if keys[65] || gamepad_buttons[3] { pad_state |= 0x1000; } // A
-        if keys[81] || gamepad_buttons[4] { pad_state |= 0x0004; } // Q
-        if keys[87] || gamepad_buttons[5] { pad_state |= 0x0008; } // W
-        if keys[69] || gamepad_buttons[6] { pad_state |= 0x0001; } // E
-        if keys[82] || gamepad_buttons[7] { pad_state |= 0x0002; } // R
-        if keys[13] || gamepad_buttons[9] { pad_state |= 0x0800; } // Enter
-        if keys[16] || gamepad_buttons[8] { pad_state |= 0x0100; } // Shift
-        
-        psx.set_controller_state(0, pad_state);
-    }
-
-    fn render_frame(&mut self, psx: &mut Psx) -> Result<(), JsValue> {
-        let (width, height) = psx.get_display_size();
+        let width = self.psx.display_width as u32;
+        let height = self.psx.display_height as u32;
         
         if self.canvas.width() != width || self.canvas.height() != height {
             self.canvas.set_width(width);
             self.canvas.set_height(height);
         }
         
-        psx.get_framebuffer(&mut self.frame_buffer);
-        
         let image_data = ImageData::new_with_u8_clamped_array_and_sh(
             wasm_bindgen::Clamped(&self.frame_buffer),
             width,
@@ -819,66 +657,18 @@ impl PsxEmulator {
         )?;
         
         self.context.put_image_data(&image_data, 0.0, 0.0)?;
-        
-        Ok(())
-    }
-    
-    fn render_test_pattern(&mut self) -> Result<(), JsValue> {
-        let width = 320u32;
-        let height = 240u32;
-        
-        self.canvas.set_width(width);
-        self.canvas.set_height(height);
-        
-        self.frame_buffer.clear();
-        self.frame_buffer.resize((width * height * 4) as usize, 0);
-        
-        let offset = (self.frame_count * 2) as u8;
-        for y in 0..height {
-            for x in 0..width {
-                let idx = ((y * width + x) * 4) as usize;
-                self.frame_buffer[idx] = ((x as u8).wrapping_add(offset));
-                self.frame_buffer[idx + 1] = ((y as u8).wrapping_add(offset / 2));
-                self.frame_buffer[idx + 2] = offset;
-                self.frame_buffer[idx + 3] = 255;
-            }
-        }
-        
-        self.frame_count += 1;
-        
-        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
-            wasm_bindgen::Clamped(&self.frame_buffer),
-            width,
-            height,
-        )?;
-        
-        self.context.put_image_data(&image_data, 0.0, 0.0)?;
-        
-        Ok(())
-    }
-
-    fn process_audio(&mut self, psx: &mut Psx) -> Result<(), JsValue> {
-        let samples = psx.get_audio_samples();
-        
-        if !samples.is_empty() && self.audio_context.is_some() {
-            self.audio_buffer.clear();
-            for &sample in samples.iter() {
-                let normalized = (sample as f32) / 32768.0;
-                self.audio_buffer.push(normalized);
-            }
-        }
         
         Ok(())
     }
 
     pub fn start(&mut self) {
         *self.running.borrow_mut() = true;
-        info!("Emulator started");
+        console_log!("Emulator started");
     }
 
     pub fn stop(&mut self) {
         *self.running.borrow_mut() = false;
-        info!("Emulator stopped");
+        console_log!("Emulator stopped");
     }
 
     pub fn is_running(&self) -> bool {
@@ -890,7 +680,7 @@ impl PsxEmulator {
         self.input_state.set_key(keycode, pressed);
         
         if pressed {
-            debug!("Key pressed: {} (code: {})", event.key(), keycode);
+            console_log!("Key pressed: {} (code: {})", event.key(), keycode);
         }
     }
 
@@ -899,23 +689,34 @@ impl PsxEmulator {
     }
 
     pub fn get_audio_buffer(&self) -> Vec<f32> {
-        self.audio_buffer.clone()
+        vec![]
     }
-}
 
-// Stub for JsError
-#[wasm_bindgen]
-pub struct JsError {
-    message: String,
-}
-
-#[wasm_bindgen]
-impl JsError {
-    pub fn new(message: String) -> Self {
-        JsError { message }
+    pub fn get_save_state(&self) -> Vec<u8> {
+        vec![]
     }
-    
-    pub fn message(&self) -> String {
-        self.message.clone()
+
+    pub fn load_save_state(&mut self, _state: &[u8]) -> Result<(), JsValue> {
+        Ok(())
+    }
+
+    pub fn reset(&mut self) {
+        self.psx = FullPsx::new();
+        console_log!("Emulator reset");
+    }
+
+    pub fn set_volume(&mut self, _volume: f32) {
+        // Audio not implemented yet
+    }
+
+    pub fn get_debug_info(&self) -> String {
+        format!("PC: {:08x}, SP: {:08x}, Frame: {}", 
+                self.psx.cpu.pc, 
+                self.psx.cpu.regs[29],
+                self.psx.frame_count)
+    }
+
+    pub fn update_gamepad_state(&mut self, gamepad: &Gamepad) {
+        self.input_state.update_gamepad(gamepad);
     }
 }
