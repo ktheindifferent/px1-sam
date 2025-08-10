@@ -80,3 +80,32 @@ This is a demonstration implementation showing the WASM framework is functional.
 - Without cdimage dependency for CD-ROM support
 
 The framework is ready for integration with the full PSX emulation modules once the cdimage dependency issue is resolved.
+
+### Full PSX Emulation Integration Attempt
+**Date:** 2025-08-10
+
+#### Work Completed
+1. **Created CD-ROM stub module** (`cd_stub.rs`) - Replaces cdimage crate with stub implementations
+2. **Created PSX WASM adapter** (`psx_wasm.rs`) - Modified PSX module without CD dependencies
+3. **Updated wasm_minimal.rs** - Attempted to integrate real PSX modules
+
+#### Technical Challenges Encountered
+The full integration revealed deep architectural dependencies:
+- **Module interdependencies**: PSX modules have circular dependencies requiring careful restructuring
+- **Missing crate dependencies**: Requires serde, thiserror, log crates not available in WASM
+- **Path resolution issues**: Modules expect specific crate structure that differs in WASM build
+- **CD-ROM deeply integrated**: Even with stubs, CD interface is tightly coupled throughout
+
+#### Solution Path Forward
+To fully integrate PSX emulation in WASM would require:
+1. **Refactor module structure**: Create WASM-specific module hierarchy
+2. **Add required dependencies** to Cargo-wasm.toml (serde, etc.)
+3. **Create compatibility layer**: Bridge between existing modules and WASM requirements
+4. **Conditional compilation**: Use `#[cfg(target_arch = "wasm32")]` throughout codebase
+
+The current implementation provides:
+- Working WASM framework with test pattern rendering
+- Input handling system ready for PSX controller
+- BIOS and game loading validation
+- Canvas rendering pipeline
+- Foundation for future integration

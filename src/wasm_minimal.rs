@@ -6,8 +6,51 @@ use web_sys::{
 };
 use std::cell::RefCell;
 
-// We can't use the full PSX modules due to dependencies, so we'll create stubs
-// This file serves as the interface between JavaScript and the emulator
+// Include our stub modules
+mod cd_stub;
+mod psx_wasm;
+
+// Include the actual PSX modules
+#[path = "psx/cpu.rs"]
+mod cpu;
+#[path = "psx/cop0.rs"]
+mod cop0;
+#[path = "psx/gpu/mod.rs"]
+mod gpu;
+#[path = "psx/gte/mod.rs"]
+mod gte;
+#[path = "psx/spu/mod.rs"]
+mod spu;
+#[path = "psx/dma.rs"]
+mod dma;
+#[path = "psx/timers.rs"]
+mod timers;
+#[path = "psx/irq.rs"]
+mod irq;
+#[path = "psx/pad_memcard/mod.rs"]
+mod pad_memcard;
+#[path = "psx/memory_control.rs"]
+mod memory_control;
+#[path = "psx/cache.rs"]
+mod cache;
+#[path = "psx/bios/mod.rs"]
+mod bios;
+#[path = "psx/xmem.rs"]
+mod xmem;
+#[path = "psx/sync.rs"]
+mod sync;
+
+// Helper modules
+#[path = "memory_card.rs"]
+mod memory_card;
+#[path = "error.rs"]
+mod error;
+#[path = "bitwise.rs"]
+mod bitwise;
+#[path = "box_array.rs"]
+mod box_array;
+
+use psx_wasm::{Psx, PsxError};
 
 #[cfg(feature = "console_error_panic_hook")]
 use console_error_panic_hook;
@@ -25,103 +68,13 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
-// Simplified internal PSX state for WASM
-struct PsxCore {
-    bios_loaded: bool,
-    game_loaded: bool,
-    ram: Vec<u8>,
-    vram: Vec<u16>,
-    frame_counter: u32,
-}
-
-impl PsxCore {
-    fn new() -> Self {
-        PsxCore {
-            bios_loaded: false,
-            game_loaded: false,
-            ram: vec![0; 2 * 1024 * 1024], // 2MB RAM
-            vram: vec![0; 1024 * 512],      // 1024x512 VRAM
-            frame_counter: 0,
-        }
-    }
-    
-    fn load_bios(&mut self, bios_data: &[u8]) -> Result<(), String> {
-        if bios_data.len() != 512 * 1024 {
-            return Err("Invalid BIOS size - must be 512KB".to_string());
-        }
-        self.bios_loaded = true;
-        console_log!("BIOS loaded (size: {} bytes)", bios_data.len());
-        Ok(())
-    }
-    
-    fn load_game(&mut self, game_data: &[u8]) -> Result<(), String> {
-        if !self.bios_loaded {
-            return Err("BIOS must be loaded first".to_string());
-        }
-        
-        // Check for PSX-EXE header
-        if game_data.len() > 8 && &game_data[0..8] == b"PS-X EXE" {
-            console_log!("PSX-EXE detected (size: {} bytes)", game_data.len());
-            self.game_loaded = true;
-            Ok(())
-        } else {
-            // Assume it's a raw binary or ISO
-            console_log!("Game data loaded (size: {} bytes)", game_data.len());
-            self.game_loaded = true;
-            Ok(())
-        }
-    }
-    
-    fn run_frame(&mut self) -> Result<(), String> {
-        if !self.bios_loaded {
-            return Err("BIOS not loaded".to_string());
-        }
-        
-        self.frame_counter += 1;
-        
-        // Generate a test pattern in VRAM for now
-        // This creates a gradient that changes over time
-        let pattern_offset = (self.frame_counter * 10) as u16;
-        for y in 0..240 {
-            for x in 0..320 {
-                let idx = y * 1024 + x;
-                // Create a moving gradient pattern
-                let r = ((x as u16 + pattern_offset) / 10) & 0x1F;
-                let g = ((y as u16 + pattern_offset / 2) / 8) & 0x1F;
-                let b = ((self.frame_counter as u16) / 4) & 0x1F;
-                self.vram[idx] = (b << 10) | (g << 5) | r;
-            }
-        }
-        
-        Ok(())
-    }
-    
-    fn get_framebuffer(&self, buffer: &mut Vec<u8>) {
-        buffer.clear();
-        
-        // Convert VRAM to RGBA for canvas
-        // We'll display a 320x240 area for now
-        for y in 0..240 {
-            for x in 0..320 {
-                let pixel = self.vram[y * 1024 + x];
-                
-                // Convert 15-bit RGB to 32-bit RGBA
-                let r = ((pixel & 0x1F) << 3) as u8;
-                let g = (((pixel >> 5) & 0x1F) << 3) as u8;
-                let b = (((pixel >> 10) & 0x1F) << 3) as u8;
-                
-                buffer.push(r);
-                buffer.push(g);
-                buffer.push(b);
-                buffer.push(255);
-            }
-        }
-    }
+macro_rules! console_error {
+    ($($t:tt)*) => (error(&format_args!($($t)*).to_string()))
 }
 
 #[wasm_bindgen]
 pub struct PsxEmulator {
-    psx: PsxCore,
+    psx: Option<Psx>,
     canvas: HtmlCanvasElement,
     context: CanvasRenderingContext2d,
     audio_context: Option<AudioContext>,
@@ -129,6 +82,7 @@ pub struct PsxEmulator {
     audio_buffer: Vec<f32>,
     input_state: InputState,
     running: RefCell<bool>,
+    frame_count: u32,
 }
 
 #[wasm_bindgen]
@@ -197,38 +151,73 @@ impl PsxEmulator {
             .dyn_into::<CanvasRenderingContext2d>()
             .unwrap();
 
-        // Set canvas size
-        canvas.set_width(320);
-        canvas.set_height(240);
+        // Set initial canvas size
+        canvas.set_width(640);
+        canvas.set_height(480);
 
         let audio_context = AudioContext::new().ok();
         
-        console_log!("PSX Emulator initialized");
+        console_log!("PSX WASM Emulator initialized");
         
         Ok(PsxEmulator {
-            psx: PsxCore::new(),
+            psx: None,
             canvas,
             context,
             audio_context,
-            frame_buffer: Vec::with_capacity(320 * 240 * 4),
-            audio_buffer: Vec::with_capacity(2048),
+            frame_buffer: Vec::with_capacity(640 * 480 * 4),
+            audio_buffer: Vec::with_capacity(4096),
             input_state: InputState::new(),
             running: RefCell::new(false),
+            frame_count: 0,
         })
     }
 
     pub fn load_bios(&mut self, bios_data: &[u8]) -> Result<(), JsValue> {
-        self.psx.load_bios(bios_data)
-            .map_err(|e| JsValue::from_str(&e))?;
-        console_log!("BIOS loaded successfully");
-        Ok(())
+        // Validate and create BIOS
+        let bios = match bios::Bios::new(bios_data) {
+            Ok(b) => b,
+            Err(e) => {
+                console_error!("Failed to load BIOS: {:?}", e);
+                return Err(JsValue::from_str(&format!("Invalid BIOS: {:?}", e)));
+            }
+        };
+        
+        // Create PSX instance
+        match Psx::new_without_disc(bios) {
+            Ok(psx) => {
+                self.psx = Some(psx);
+                console_log!("PSX initialized with BIOS");
+                Ok(())
+            }
+            Err(e) => {
+                console_error!("Failed to initialize PSX: {:?}", e);
+                Err(JsValue::from_str(&format!("PSX init failed: {:?}", e)))
+            }
+        }
     }
 
     pub fn load_game(&mut self, game_data: &[u8]) -> Result<(), JsValue> {
-        self.psx.load_game(game_data)
-            .map_err(|e| JsValue::from_str(&e))?;
-        console_log!("Game loaded successfully");
-        Ok(())
+        if let Some(ref mut psx) = self.psx {
+            // Try to load as PSX-EXE
+            if game_data.len() > 8 && &game_data[0..8] == b"PS-X EXE" {
+                match psx.load_exe(game_data) {
+                    Ok(_) => {
+                        console_log!("PSX-EXE loaded successfully");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        console_error!("Failed to load EXE: {:?}", e);
+                        Err(JsValue::from_str(&format!("Failed to load EXE: {:?}", e)))
+                    }
+                }
+            } else {
+                // For now, we only support PSX-EXE files
+                console_error!("Only PSX-EXE files are supported in WASM build");
+                Err(JsValue::from_str("Only PSX-EXE files are supported"))
+            }
+        } else {
+            Err(JsValue::from_str("BIOS must be loaded first"))
+        }
     }
 
     pub fn run_frame(&mut self) -> Result<(), JsValue> {
@@ -236,23 +225,147 @@ impl PsxEmulator {
             return Ok(());
         }
 
-        // Run emulation
-        self.psx.run_frame()
-            .map_err(|e| JsValue::from_str(&e))?;
+        if let Some(ref mut psx) = self.psx {
+            // Update input
+            self.update_input(psx);
+            
+            // Run emulation for one frame
+            match psx.run_frame() {
+                Ok(_) => {
+                    self.frame_count += 1;
+                    
+                    // Render frame
+                    self.render_frame(psx)?;
+                    
+                    // Process audio
+                    self.process_audio(psx)?;
+                    
+                    // Log frame count every second
+                    if self.frame_count % 60 == 0 {
+                        console_log!("Frame {}: Emulation running", self.frame_count);
+                    }
+                    
+                    Ok(())
+                }
+                Err(e) => {
+                    console_error!("Frame execution error: {:?}", e);
+                    *self.running.borrow_mut() = false;
+                    Err(JsValue::from_str(&format!("Emulation error: {:?}", e)))
+                }
+            }
+        } else {
+            // No PSX loaded - show test pattern
+            self.render_test_pattern()?;
+            Ok(())
+        }
+    }
+    
+    fn update_input(&self, psx: &mut Psx) {
+        let keys = self.input_state.keys.borrow();
+        let gamepad_buttons = self.input_state.gamepad_buttons.borrow();
         
-        // Get framebuffer and render
-        self.psx.get_framebuffer(&mut self.frame_buffer);
+        let mut pad_state = 0u16;
         
+        // D-Pad
+        if keys[38] || gamepad_buttons[12] { pad_state |= 0x0010; } // Up
+        if keys[40] || gamepad_buttons[13] { pad_state |= 0x0040; } // Down
+        if keys[37] || gamepad_buttons[14] { pad_state |= 0x0080; } // Left
+        if keys[39] || gamepad_buttons[15] { pad_state |= 0x0020; } // Right
+        
+        // Face buttons
+        if keys[88] || gamepad_buttons[0] { pad_state |= 0x4000; } // X (Cross)
+        if keys[90] || gamepad_buttons[1] { pad_state |= 0x2000; } // Z (Circle)
+        if keys[83] || gamepad_buttons[2] { pad_state |= 0x8000; } // S (Square)
+        if keys[65] || gamepad_buttons[3] { pad_state |= 0x1000; } // A (Triangle)
+        
+        // Shoulder buttons
+        if keys[81] || gamepad_buttons[4] { pad_state |= 0x0004; } // Q (L1)
+        if keys[87] || gamepad_buttons[5] { pad_state |= 0x0008; } // W (R1)
+        if keys[69] || gamepad_buttons[6] { pad_state |= 0x0001; } // E (L2)
+        if keys[82] || gamepad_buttons[7] { pad_state |= 0x0002; } // R (R2)
+        
+        // Start/Select
+        if keys[13] || gamepad_buttons[9] { pad_state |= 0x0800; } // Enter (Start)
+        if keys[16] || gamepad_buttons[8] { pad_state |= 0x0100; } // Shift (Select)
+        
+        psx.set_controller_state(0, pad_state);
+    }
+
+    fn render_frame(&mut self, psx: &mut Psx) -> Result<(), JsValue> {
+        let (width, height) = psx.get_display_size();
+        
+        // Ensure canvas matches display size
+        if self.canvas.width() != width || self.canvas.height() != height {
+            self.canvas.set_width(width);
+            self.canvas.set_height(height);
+        }
+        
+        // Get framebuffer from PSX
+        psx.get_framebuffer(&mut self.frame_buffer);
+        
+        // Create ImageData and render to canvas
         let image_data = ImageData::new_with_u8_clamped_array_and_sh(
             wasm_bindgen::Clamped(&self.frame_buffer),
-            320,
-            240,
+            width,
+            height,
         )?;
         
         self.context.put_image_data(&image_data, 0.0, 0.0)?;
         
-        // Audio processing would go here
-        // For now, we'll skip audio to avoid web-sys API issues
+        Ok(())
+    }
+    
+    fn render_test_pattern(&mut self) -> Result<(), JsValue> {
+        // Generate a test pattern when no PSX is loaded
+        let width = 320u32;
+        let height = 240u32;
+        
+        self.canvas.set_width(width);
+        self.canvas.set_height(height);
+        
+        self.frame_buffer.clear();
+        self.frame_buffer.resize((width * height * 4) as usize, 0);
+        
+        // Create animated gradient
+        let offset = (self.frame_count * 2) as u8;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                self.frame_buffer[idx] = ((x as u8).wrapping_add(offset)); // R
+                self.frame_buffer[idx + 1] = ((y as u8).wrapping_add(offset / 2)); // G
+                self.frame_buffer[idx + 2] = offset; // B
+                self.frame_buffer[idx + 3] = 255; // A
+            }
+        }
+        
+        self.frame_count += 1;
+        
+        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
+            wasm_bindgen::Clamped(&self.frame_buffer),
+            width,
+            height,
+        )?;
+        
+        self.context.put_image_data(&image_data, 0.0, 0.0)?;
+        
+        Ok(())
+    }
+
+    fn process_audio(&mut self, psx: &mut Psx) -> Result<(), JsValue> {
+        // Get audio samples from SPU
+        let samples = psx.get_audio_samples();
+        
+        if !samples.is_empty() && self.audio_context.is_some() {
+            // Convert i16 samples to f32
+            self.audio_buffer.clear();
+            for &sample in samples.iter() {
+                let normalized = (sample as f32) / 32768.0;
+                self.audio_buffer.push(normalized);
+            }
+            
+            // Audio playback would go here
+            // Skipping for now to avoid web-sys API complexity
+        }
         
         Ok(())
     }
@@ -277,7 +390,7 @@ impl PsxEmulator {
         
         // Log key events for debugging
         if pressed {
-            console_log!("Key pressed: {}", keycode);
+            console_log!("Key pressed: {} (code: {})", event.key(), keycode);
         }
     }
 
