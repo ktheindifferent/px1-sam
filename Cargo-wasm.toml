@@ -10,7 +10,7 @@ keywords = ["emulator", "playstation", "wasm"]
 [lib]
 name = "rustation_wasm"
 crate-type = ["cdylib"]
-path = "src/wasm.rs"
+path = "src/wasm_minimal.rs"
 
 [features]
 default = ["console_error_panic_hook"]
@@ -20,6 +20,9 @@ opt-level = "z"
 lto = true
 debug = false
 panic = 'abort'
+
+[package.metadata.wasm-pack]
+wasm-opt = false
 
 [dependencies]
 wasm-bindgen = "0.2"

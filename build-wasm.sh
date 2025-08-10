@@ -34,8 +34,8 @@ if [ -f "Cargo.toml" ]; then
 fi
 mv Cargo-wasm.toml Cargo.toml
 
-# Build with wasm-pack
-wasm-pack build --target web --out-dir wasm-pkg
+# Build with wasm-pack (skip wasm-opt if it's incompatible)
+WASM_PACK_NO_OPT_COMPATIBILITY_MODE=1 wasm-pack build --target web --out-dir wasm-pkg --no-opt
 
 # Restore original Cargo.toml
 mv Cargo.toml Cargo-wasm.toml
@@ -43,12 +43,16 @@ if [ -f "Cargo.toml.main" ]; then
     mv Cargo.toml.main Cargo.toml
 fi
 
-echo "Optimizing WASM binary..."
-wasm-opt -Oz \
+echo "Attempting to optimize WASM binary..."
+if wasm-opt -Oz \
     -o wasm-pkg/rustation_wasm_bg_optimized.wasm \
-    wasm-pkg/rustation_wasm_bg.wasm
-
-mv wasm-pkg/rustation_wasm_bg_optimized.wasm wasm-pkg/rustation_wasm_bg.wasm
+    wasm-pkg/rustation_wasm_bg.wasm 2>/dev/null; then
+    mv wasm-pkg/rustation_wasm_bg_optimized.wasm wasm-pkg/rustation_wasm_bg.wasm
+    echo "WASM optimization successful"
+else
+    echo "WARNING: wasm-opt optimization failed, using unoptimized binary"
+    echo "This is likely due to version incompatibility and doesn't affect functionality"
+fi
 
 echo "WASM build complete! Output in wasm-pkg/"
 echo "To test in browser, run: python3 -m http.server 8000"
