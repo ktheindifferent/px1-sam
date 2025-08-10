@@ -12,21 +12,21 @@ The WebAssembly build of the Rustation PSX emulator was showing a black screen w
 - Resource loading 404 errors
 
 #### Root Cause
-The WASM interface methods (`set_input`, `get_save_state`, `load_save_state`) in `src/wasm.rs` were not properly exposed to JavaScript because they were missing the `#[wasm_bindgen]` attribute.
+Multiple issues were identified:
+1. The build was using `wasm_minimal.rs` instead of the full `wasm.rs` (full version has cdimage dependencies that can't be resolved)
+2. The JavaScript was trying to call `set_input()` which doesn't exist in the minimal version
+3. The HTML was creating a separate InputState instead of using the emulator's keyboard event handler
 
 #### Solution
-1. Added `#[wasm_bindgen]` attributes to the following methods in `src/wasm.rs`:
-   - `set_input()` - Required for input handling
-   - `get_save_state()` - Required for save state functionality
-   - `load_save_state()` - Required for loading saved states
-
-2. Installed missing build dependencies:
+1. Configured build to use `wasm_minimal.rs` which has a working minimal implementation
+2. Updated HTML/JavaScript to use `handle_keyboard_event()` method instead of trying to manage InputState separately
+3. Installed missing build dependencies:
    - `binaryen` package for wasm-opt optimization
-
-3. Rebuilt the WASM module with the corrected bindings
+4. Fixed Cargo-wasm.toml configuration with proper dependencies
 
 #### Files Modified
-- `/root/repo/src/wasm.rs` - Added wasm_bindgen attributes to expose methods
+- `/root/repo/index.html` - Updated to use handle_keyboard_event() instead of InputState
+- `/root/repo/Cargo-wasm.toml` - Configured to use wasm_minimal.rs with proper dependencies
 
 #### Build Process
 ```bash

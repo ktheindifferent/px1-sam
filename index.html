@@ -346,7 +346,7 @@
     </div>
     
     <script type="module">
-        import init, { PsxEmulator, InputState } from './wasm-pkg/rustation_wasm.js';
+        import init, { PsxEmulator } from './wasm-pkg/rustation_wasm.js';
         
         let emulator = null;
         let animationId = null;
@@ -389,37 +389,25 @@
                 await init();
                 emulator = new PsxEmulator('gameCanvas');
                 
-                const inputState = InputState.new();
-                
                 document.addEventListener('keydown', (e) => {
                     if (emulator && isRunning) {
-                        inputState.set_key(e.keyCode, true);
+                        emulator.handle_keyboard_event(e, true);
                         e.preventDefault();
                     }
                 });
                 
                 document.addEventListener('keyup', (e) => {
                     if (emulator && isRunning) {
-                        inputState.set_key(e.keyCode, false);
+                        emulator.handle_keyboard_event(e, false);
                         e.preventDefault();
                     }
                 });
                 
-                const pollGamepads = () => {
-                    const gamepads = navigator.getGamepads();
-                    for (let gamepad of gamepads) {
-                        if (gamepad && emulator && isRunning) {
-                            inputState.update_gamepad(gamepad);
-                        }
-                    }
-                };
-                
+                // Note: Gamepad support would need to be added to wasm_minimal.rs
                 window.addEventListener('gamepadconnected', (e) => {
                     console.log('Gamepad connected:', e.gamepad.id);
                     setStatus('Gamepad connected: ' + e.gamepad.id, 'ready');
                 });
-                
-                emulator.set_input(inputState);
                 
                 setStatus('Emulator initialized - Load BIOS and Game', 'ready');
             } catch (error) {

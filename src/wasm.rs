@@ -153,6 +153,10 @@ impl PsxEmulator {
         *self.running.borrow()
     }
 
+    pub fn get_input_state(&self) -> &InputState {
+        &self.input_state
+    }
+
     pub fn run_frame(&mut self) -> Result<(), JsValue> {
         if !self.is_running() {
             return Ok(());
@@ -249,17 +253,14 @@ impl PsxEmulator {
         Ok(())
     }
 
-    #[wasm_bindgen]
     pub fn set_input(&mut self, input_state: InputState) {
         self.input_state = input_state;
     }
 
-    #[wasm_bindgen]
     pub fn get_save_state(&self) -> Vec<u8> {
         self.psx.serialize_state()
     }
 
-    #[wasm_bindgen]
     pub fn load_save_state(&mut self, state_data: &[u8]) -> Result<(), JsValue> {
         self.psx.deserialize_state(state_data)
             .map_err(|e| JsValue::from_str(&format!("Failed to load save state: {:?}", e)))
