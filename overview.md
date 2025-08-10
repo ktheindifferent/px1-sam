@@ -49,3 +49,47 @@ Access at `http://localhost:8000` after starting the test server.
 - WASM build functional with all core features exposed
 - Input handling, save states, and rendering working properly
 - Ready for testing with BIOS and game files
+- Build system updated and all tests passing
+
+### Architecture Overview
+
+#### Core Emulation (`src/psx/`)
+- **CPU Module** (`cpu.rs`, `cpu_instructions.rs`): MIPS R3000A processor emulation
+- **GPU Module** (`gpu/`): Graphics processing and rendering
+- **SPU Module** (`spu/`): Sound processing unit
+- **GTE Module** (`gte/`): Geometry Transform Engine for 3D calculations
+- **DMA Module** (`dma.rs`): Direct Memory Access controller
+- **Memory Management** (`memory_map.rs`, `memory_control.rs`): RAM, ROM, and I/O mapping
+
+#### WASM Implementation Variants
+- **wasm.rs**: Full-featured WASM implementation (has CD dependencies)
+- **wasm_minimal.rs**: Minimal working implementation without CD support
+- **wasm_unified.rs**: Unified interface with multiple format support
+- **wasm_enhanced.rs**: Enhanced features including save states
+- **wasm_bridge.rs**: Bridge layer for JavaScript interop
+
+#### Error Handling
+- **error.rs**: Original error types for libretro build
+- **error_stub.rs**: WASM-specific error types with enhanced information
+- **error_traits.rs**: Comprehensive error trait system for unified handling
+
+#### Testing Infrastructure
+- **tests/**: Comprehensive test suite
+  - error_handling_tests.rs
+  - save_state_tests.rs
+  - performance_monitor_tests.rs
+  - input_validation_tests.rs
+  - memory_safety_tests.rs
+  - integration_tests.rs
+
+### Build Configuration
+- **Cargo.toml**: Main build configuration for libretro
+- **Cargo-wasm.toml**: WebAssembly-specific configuration
+- **build-wasm.sh**: Automated WASM build script
+- **test-wasm.sh**: Local testing script
+
+### Recent Improvements
+- Fixed compilation errors with proper error type usage
+- Added missing flexbuffers dependency
+- Resolved all test compilation issues
+- Cleaned up unused variable warnings

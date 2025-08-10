@@ -833,7 +833,7 @@ impl Cop0 {
         self.regs[12] = (self.regs[12] & !0xf) | (mode >> 2);
     }
     
-    pub fn interrupt_pending(&self, irq: &InterruptState) -> bool {
+    pub fn interrupt_pending(&self, _irq: &InterruptState) -> bool {
         let status = self.regs[12];
         let cause = self.regs[13];
         
@@ -897,7 +897,7 @@ impl Gte {
         self.control[index as usize & 0x1f] = val;
     }
     
-    pub fn execute(&mut self, command: u32) {
+    pub fn execute(&mut self, _command: u32) {
         // Simplified GTE - just set FLAG register to indicate completion
         self.control[31] = 0; // FLAG - no errors
     }
@@ -1517,7 +1517,7 @@ impl Psx {
     
     pub fn load_bios(&mut self, data: &[u8]) -> Result<()> {
         if data.len() != BIOS_SIZE {
-            return Err(PsxError::InvalidBios);
+            return Err(PsxError::invalid_bios("Invalid BIOS size"));
         }
         self.bios.copy_from_slice(data);
         Ok(())
@@ -1525,11 +1525,11 @@ impl Psx {
     
     pub fn load_exe(&mut self, data: &[u8]) -> Result<()> {
         if data.len() < 0x800 {
-            return Err(PsxError::InvalidExe);
+            return Err(PsxError::invalid_exe("Invalid EXE size"));
         }
         
         if &data[0..8] != b"PS-X EXE" {
-            return Err(PsxError::InvalidExe);
+            return Err(PsxError::invalid_exe("Invalid EXE size"));
         }
         
         let pc = u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]);

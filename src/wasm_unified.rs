@@ -291,7 +291,7 @@ impl PsxEmulator {
             console_log!("Detected CUE file format");
             
             // Parse CUE file content
-            let cue_content = std::str::from_utf8(game_data).map_err(|e| {
+            let _cue_content = std::str::from_utf8(game_data).map_err(|e| {
                 console_error!("Invalid CUE file encoding: {:?}", e);
                 JsValue::from_str("Invalid CUE file format")
             })?;
