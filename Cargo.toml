@@ -32,6 +32,11 @@ features = [
   "ImageData",
   "KeyboardEvent",
   "AudioContext",
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "AudioDestinationNode",
+  "AudioNode",
+  "BaseAudioContext",
   "Gamepad",
   "GamepadButton",
 ]

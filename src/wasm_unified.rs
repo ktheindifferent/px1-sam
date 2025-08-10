@@ -11,7 +11,7 @@ use std::rc::Rc;
 #[path = "cd_stub.rs"]
 mod cdimage;
 
-#[path = "psx_stub.rs"]
+#[path = "psx_enhanced.rs"]
 mod psx;
 
 #[path = "error_stub.rs"]

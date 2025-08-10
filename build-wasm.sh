@@ -28,20 +28,13 @@ if [ -d "wasi-sdk-20.0" ]; then
     echo "Using WASI SDK at $WASI_SDK_PATH"
 fi
 
-# Temporarily swap Cargo.toml files for wasm-pack
-if [ -f "Cargo.toml" ]; then
-    mv Cargo.toml Cargo.toml.main
+# Ensure we have the WASM Cargo.toml
+if [ -f "Cargo.toml.main" ]; then
+    cp Cargo.toml.main Cargo.toml
 fi
-mv Cargo-wasm.toml Cargo.toml
 
 # Build with wasm-pack (skip wasm-opt if it's incompatible)
 WASM_PACK_NO_OPT_COMPATIBILITY_MODE=1 wasm-pack build --target web --out-dir wasm-pkg --no-opt
-
-# Restore original Cargo.toml
-mv Cargo.toml Cargo-wasm.toml
-if [ -f "Cargo.toml.main" ]; then
-    mv Cargo.toml.main Cargo.toml
-fi
 
 echo "Attempting to optimize WASM binary..."
 if wasm-opt -Oz \
