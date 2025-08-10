@@ -255,6 +255,11 @@ impl PsxEmulator {
     }
     
     pub fn load_bios(&mut self, bios_data: &[u8]) -> std::result::Result<(), JsValue> {
+        if bios_data.is_empty() {
+            console_error!("BIOS data is empty!");
+            return Err(JsValue::from_str("BIOS data is empty"));
+        }
+        
         console_log!("Loading BIOS ({} bytes)", bios_data.len());
         
         self.psx.load_bios(bios_data).map_err(|e| {
