@@ -38,12 +38,13 @@ impl Gpu {
         }
     }
     
-    pub fn load<T: AccessWidth>(&self, _addr: u32) -> T {
-        T::from_u32(0)
+    pub fn load<T: AccessWidth>(&self, _addr: u32) -> Result<T> {
+        Ok(T::from_u32(0))
     }
     
-    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {
+    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) -> Result<()> {
         // Stub implementation
+        Ok(())
     }
 }
 
@@ -59,12 +60,13 @@ impl Spu {
         }
     }
     
-    pub fn load<T: AccessWidth>(&self, _addr: u32) -> T {
-        T::from_u32(0)
+    pub fn load<T: AccessWidth>(&self, _addr: u32) -> Result<T> {
+        Ok(T::from_u32(0))
     }
     
-    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {
+    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) -> Result<()> {
         // Stub implementation
+        Ok(())
     }
 }
 
@@ -80,12 +82,13 @@ impl Dma {
         }
     }
     
-    pub fn load<T: AccessWidth>(&self, _addr: u32) -> T {
-        T::from_u32(0)
+    pub fn load<T: AccessWidth>(&self, _addr: u32) -> Result<T> {
+        Ok(T::from_u32(0))
     }
     
-    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {
+    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) -> Result<()> {
         // Stub implementation
+        Ok(())
     }
 }
 
@@ -112,12 +115,13 @@ impl Timers {
         }
     }
     
-    pub fn load<T: AccessWidth>(&self, _addr: u32) -> T {
-        T::from_u32(0)
+    pub fn load<T: AccessWidth>(&self, _addr: u32) -> Result<T> {
+        Ok(T::from_u32(0))
     }
     
-    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {
+    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) -> Result<()> {
         // Stub implementation
+        Ok(())
     }
 }
 
@@ -146,12 +150,13 @@ impl Irq {
         }
     }
     
-    pub fn load<T: AccessWidth>(&self, _addr: u32) -> T {
-        T::from_u32(0)
+    pub fn load<T: AccessWidth>(&self, _addr: u32) -> Result<T> {
+        Ok(T::from_u32(0))
     }
     
-    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {
+    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) -> Result<()> {
         // Stub implementation
+        Ok(())
     }
 }
 
@@ -167,12 +172,13 @@ impl PadMemCard {
         }
     }
     
-    pub fn load<T: AccessWidth>(&self, _addr: u32) -> T {
-        T::from_u32(0)
+    pub fn load<T: AccessWidth>(&self, _addr: u32) -> Result<T> {
+        Ok(T::from_u32(0))
     }
     
-    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) {
+    pub fn store<T: AccessWidth>(&mut self, _addr: u32, _val: T) -> Result<()> {
         // Stub implementation
+        Ok(())
     }
 }
 
@@ -291,44 +297,158 @@ impl Psx {
     }
     
     pub fn load_bios(&mut self, bios_data: &[u8]) -> Result<()> {
-        if bios_data.len() != 512 * 1024 {
-            return Err(PsxError::InvalidBios);
+        // Enhanced BIOS validation
+        const EXPECTED_BIOS_SIZE: usize = 512 * 1024;
+        
+        if bios_data.is_empty() {
+            return Err(PsxError::invalid_bios("BIOS data is empty"));
         }
+        
+        if bios_data.len() != EXPECTED_BIOS_SIZE {
+            return Err(PsxError::invalid_bios(format!(
+                "Invalid BIOS size: expected {} bytes, got {} bytes",
+                EXPECTED_BIOS_SIZE,
+                bios_data.len()
+            )));
+        }
+        
+        // Validate BIOS signature (PlayStation BIOS typically starts with specific patterns)
+        // Check for common BIOS signatures
+        let has_valid_signature = self.validate_bios_signature(bios_data);
+        if !has_valid_signature {
+            return Err(PsxError::invalid_bios(
+                "BIOS signature validation failed - may not be a valid PlayStation BIOS"
+            ));
+        }
+        
         self.bios.copy_from_slice(bios_data);
         Ok(())
     }
     
+    fn validate_bios_signature(&self, bios_data: &[u8]) -> bool {
+        // Check for common BIOS entry point patterns
+        if bios_data.len() < 4 {
+            return false;
+        }
+        
+        // PlayStation BIOS typically has specific patterns at the reset vector
+        // This is a simplified check - real validation would be more comprehensive
+        let first_word = u32::from_le_bytes([bios_data[0], bios_data[1], bios_data[2], bios_data[3]]);
+        
+        // Check if it looks like MIPS code (rough heuristic)
+        // Most BIOS start with a jump or branch instruction
+        let is_jump = (first_word >> 26) == 0x02 || (first_word >> 26) == 0x03; // J or JAL
+        let is_branch = (first_word >> 26) == 0x04 || (first_word >> 26) == 0x05; // BEQ or BNE
+        
+        is_jump || is_branch || first_word == 0x3C080000 // LUI instruction common in BIOS
+    }
+    
     pub fn load_exe(&mut self, exe_data: &[u8]) -> Result<()> {
-        // Parse PSX-EXE header
-        if exe_data.len() < 0x800 {
-            return Err(PsxError::InvalidExe);
+        // Enhanced PSX-EXE loading with comprehensive validation
+        const MIN_EXE_SIZE: usize = 0x800;
+        const MAX_EXE_SIZE: usize = 2 * 1024 * 1024; // 2MB max
+        
+        if exe_data.is_empty() {
+            return Err(PsxError::invalid_exe("EXE data is empty"));
+        }
+        
+        if exe_data.len() < MIN_EXE_SIZE {
+            return Err(PsxError::invalid_exe(format!(
+                "EXE file too small: {} bytes (minimum: {} bytes)",
+                exe_data.len(),
+                MIN_EXE_SIZE
+            )));
+        }
+        
+        if exe_data.len() > MAX_EXE_SIZE {
+            return Err(PsxError::invalid_exe(format!(
+                "EXE file too large: {} bytes (maximum: {} bytes)",
+                exe_data.len(),
+                MAX_EXE_SIZE
+            )));
         }
         
         // Check magic
         if &exe_data[0..8] != b"PS-X EXE" {
-            return Err(PsxError::InvalidExe);
+            return Err(PsxError::invalid_exe(
+                "Invalid magic signature - not a PSX-EXE file"
+            ));
         }
         
-        // Read header fields (little-endian)
-        let pc = u32::from_le_bytes([exe_data[0x10], exe_data[0x11], exe_data[0x12], exe_data[0x13]]);
-        let gp = u32::from_le_bytes([exe_data[0x14], exe_data[0x15], exe_data[0x16], exe_data[0x17]]);
-        let dest = u32::from_le_bytes([exe_data[0x18], exe_data[0x19], exe_data[0x1a], exe_data[0x1b]]);
-        let size = u32::from_le_bytes([exe_data[0x1c], exe_data[0x1d], exe_data[0x1e], exe_data[0x1f]]);
+        // Safely read header fields with bounds checking
+        let pc = self.read_u32_safe(exe_data, 0x10)?;
+        let gp = self.read_u32_safe(exe_data, 0x14)?;
+        let dest = self.read_u32_safe(exe_data, 0x18)?;
+        let size = self.read_u32_safe(exe_data, 0x1c)?;
+        let sp_base = self.read_u32_safe(exe_data, 0x30)?;
+        let sp_offset = self.read_u32_safe(exe_data, 0x34)?;
+        
+        // Validate addresses
+        if pc < 0x80000000 || pc >= 0x80200000 {
+            return Err(PsxError::invalid_exe(format!(
+                "Invalid PC address: {:#010x}",
+                pc
+            )));
+        }
+        
+        if dest < 0x80000000 || dest >= 0x80200000 {
+            return Err(PsxError::invalid_exe(format!(
+                "Invalid destination address: {:#010x}",
+                dest
+            )));
+        }
+        
+        // Calculate and validate sizes
+        let available_data = exe_data.len().saturating_sub(MIN_EXE_SIZE);
+        let exe_size = (size as usize).min(available_data);
+        
+        if exe_size == 0 {
+            return Err(PsxError::invalid_exe("No executable data to load"));
+        }
+        
+        // Calculate destination offset in RAM
+        let dest_offset = (dest & 0x1fffff) as usize;
+        
+        // Validate that the executable fits in RAM
+        if dest_offset.saturating_add(exe_size) > self.xmem.ram.len() {
+            return Err(PsxError::invalid_exe(format!(
+                "Executable would overflow RAM: dest={:#x}, size={:#x}, RAM size={:#x}",
+                dest_offset,
+                exe_size,
+                self.xmem.ram.len()
+            )));
+        }
         
         // Copy executable to RAM
-        let dest_offset = (dest & 0x1fffff) as usize;
-        let exe_size = size.min((exe_data.len() - 0x800) as u32) as usize;
+        let exe_start = MIN_EXE_SIZE;
+        let exe_end = exe_start + exe_size;
         
-        if dest_offset + exe_size <= self.xmem.ram.len() {
-            self.xmem.ram[dest_offset..dest_offset + exe_size]
-                .copy_from_slice(&exe_data[0x800..0x800 + exe_size]);
-        }
+        self.xmem.ram[dest_offset..dest_offset + exe_size]
+            .copy_from_slice(&exe_data[exe_start..exe_end]);
         
-        // Set PC and GP
+        // Set CPU registers
         self.cpu.pc = pc;
         self.cpu.regs[28] = gp; // GP register
+        self.cpu.regs[29] = sp_base.wrapping_add(sp_offset); // SP register
+        self.cpu.regs[30] = sp_base.wrapping_add(sp_offset); // FP register
         
         Ok(())
+    }
+    
+    fn read_u32_safe(&self, data: &[u8], offset: usize) -> Result<u32> {
+        if offset + 4 > data.len() {
+            return Err(PsxError::invalid_exe(format!(
+                "Cannot read u32 at offset {:#x}: out of bounds",
+                offset
+            )));
+        }
+        
+        Ok(u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]))
     }
     
     pub fn init_with_disc(&mut self) -> Result<()> {
@@ -352,16 +472,53 @@ impl Psx {
     pub fn run_frame(&mut self) -> Result<()> {
         // Run approximately one frame worth of CPU cycles
         // PSX runs at ~33.8688 MHz, 60 FPS = ~564,480 cycles per frame
-        for _ in 0..10000 {
-            self.cpu.step()?;
+        const CYCLES_PER_FRAME: u32 = 564_480;
+        const CYCLES_PER_ITERATION: u32 = 100;
+        
+        for cycle in 0..(CYCLES_PER_FRAME / CYCLES_PER_ITERATION) {
+            self.cpu.step().map_err(|e| {
+                PsxError::emulation(
+                    "CPU",
+                    format!("CPU step failed at cycle {}: {:?}", cycle * CYCLES_PER_ITERATION, e),
+                )
+            })?;
+            
+            // Update other components periodically
+            if cycle % 10 == 0 {
+                self.update_timers()?;
+                self.check_interrupts()?;
+            }
         }
         Ok(())
     }
     
-    pub fn set_controller_state(&mut self, controller: usize, state: u16) {
-        if controller < 2 {
-            self.pad_memcard.controller_state[controller] = state;
+    fn update_timers(&mut self) -> Result<()> {
+        // Update timer counters
+        for timer in &mut self.timers.timers {
+            timer.counter = timer.counter.wrapping_add(1);
         }
+        Ok(())
+    }
+    
+    fn check_interrupts(&mut self) -> Result<()> {
+        // Check and handle interrupts
+        if self.irq.status & self.irq.mask != 0 {
+            // Interrupt pending
+            // Would trigger CPU interrupt here
+        }
+        Ok(())
+    }
+    
+    pub fn set_controller_state(&mut self, controller: usize, state: u16) -> Result<()> {
+        if controller >= 2 {
+            return Err(PsxError::ControllerError {
+                port: controller,
+                reason: format!("Invalid controller port: {} (valid: 0-1)", controller),
+            });
+        }
+        
+        self.pad_memcard.controller_state[controller] = state;
+        Ok(())
     }
     
     pub fn get_framebuffer(&self, buffer: &mut Vec<u8>) {
@@ -388,44 +545,106 @@ impl Psx {
         buffer.clear();
     }
     
-    fn load<T: AccessWidth>(&self, addr: u32) -> T {
+    fn load<T: AccessWidth>(&self, addr: u32) -> Result<T> {
         let masked_addr = addr & 0x1fffffff;
         
         match masked_addr {
             0x00000000..=0x001fffff => {
                 // RAM
                 let offset = (masked_addr & 0x1fffff) as usize;
-                if offset < self.xmem.ram.len() {
-                    T::from_u32(self.xmem.ram[offset] as u32)
-                } else {
-                    T::from_u32(0)
+                if offset >= self.xmem.ram.len() {
+                    return Err(PsxError::memory_violation(addr));
                 }
+                Ok(T::from_u32(self.xmem.ram[offset] as u32))
             }
             0x1fc00000..=0x1fc7ffff => {
                 // BIOS
                 let offset = (masked_addr & 0x7ffff) as usize;
-                if offset < self.bios.len() {
-                    T::from_u32(self.bios[offset] as u32)
-                } else {
-                    T::from_u32(0)
+                if offset >= self.bios.len() {
+                    return Err(PsxError::memory_violation(addr));
                 }
+                Ok(T::from_u32(self.bios[offset] as u32))
             }
-            _ => T::from_u32(0),
+            0x1f801000..=0x1f801fff => {
+                // Hardware registers
+                self.load_hardware_register(masked_addr)
+            }
+            _ => {
+                // Unknown memory region - log and return default
+                Ok(T::from_u32(0))
+            }
         }
     }
     
-    fn store<T: AccessWidth>(&mut self, addr: u32, val: T) {
+    fn load_hardware_register<T: AccessWidth>(&self, addr: u32) -> Result<T> {
+        // Handle hardware register reads
+        match addr {
+            0x1f801070..=0x1f801077 => {
+                // IRQ registers
+                self.irq.load(addr)
+            }
+            0x1f801080..=0x1f8010ff => {
+                // DMA registers
+                self.dma.load(addr)
+            }
+            0x1f801100..=0x1f80112f => {
+                // Timer registers
+                self.timers.load(addr)
+            }
+            _ => Ok(T::from_u32(0)),
+        }
+    }
+    
+    fn store<T: AccessWidth>(&mut self, addr: u32, val: T) -> Result<()> {
         let masked_addr = addr & 0x1fffffff;
         
         match masked_addr {
             0x00000000..=0x001fffff => {
-                // RAM
+                // RAM - validate bounds
                 let offset = (masked_addr & 0x1fffff) as usize;
+                let bytes_needed = std::mem::size_of::<T>();
+                
+                if offset + bytes_needed > self.xmem.ram.len() {
+                    return Err(PsxError::memory_violation(addr));
+                }
+                
                 val.store(&mut self.xmem.ram[offset..]);
+                Ok(())
+            }
+            0x1fc00000..=0x1fc7ffff => {
+                // BIOS - read-only
+                Err(PsxError::emulation(
+                    "BIOS",
+                    format!("Attempted write to read-only BIOS at {:#010x}", addr),
+                ))
+            }
+            0x1f801000..=0x1f801fff => {
+                // Hardware registers
+                self.store_hardware_register(addr, val)
             }
             _ => {
-                // Ignore writes to other areas for now
+                // Ignore writes to unmapped areas
+                Ok(())
             }
+        }
+    }
+    
+    fn store_hardware_register<T: AccessWidth>(&mut self, addr: u32, val: T) -> Result<()> {
+        // Handle hardware register writes
+        match addr {
+            0x1f801070..=0x1f801077 => {
+                // IRQ registers
+                self.irq.store(addr, val)
+            }
+            0x1f801080..=0x1f8010ff => {
+                // DMA registers
+                self.dma.store(addr, val)
+            }
+            0x1f801100..=0x1f80112f => {
+                // Timer registers
+                self.timers.store(addr, val)
+            }
+            _ => Ok(()),
         }
     }
 }
