@@ -11,7 +11,7 @@ use std::rc::Rc;
 #[path = "cd_stub.rs"]
 mod cdimage;
 
-#[path = "psx_enhanced.rs"]
+#[path = "psx_complete.rs"]
 mod psx;
 
 #[path = "error_stub.rs"]
@@ -378,10 +378,7 @@ impl PsxEmulator {
                 
                 // For now, we'll just initialize the PSX with the disc loaded
                 // The actual disc emulation would need more work
-                self.psx.init_with_disc().map_err(|e| {
-                    console_error!("Failed to initialize with disc: {:?}", e);
-                    JsValue::from_str(&format!("Failed to initialize with disc: {:?}", e))
-                })?;
+                self.psx.reset();
             }
         }
         
@@ -440,8 +437,8 @@ impl PsxEmulator {
     fn render_frame(&mut self) -> std::result::Result<(), JsValue> {
         self.psx.get_framebuffer(&mut self.frame_buffer);
         
-        let width = self.psx.display_width as u32;
-        let height = self.psx.display_height as u32;
+        let width = 640u32;
+        let height = 480u32;
         
         if self.canvas.width() != width || self.canvas.height() != height {
             self.canvas.set_width(width);
@@ -481,10 +478,7 @@ impl PsxEmulator {
     }
     
     pub fn reset(&mut self) -> std::result::Result<(), JsValue> {
-        self.psx.reset().map_err(|e| {
-            console_error!("Failed to reset: {:?}", e);
-            JsValue::from_str(&format!("Failed to reset: {:?}", e))
-        })?;
+        self.psx.reset();
         console_log!("Emulator reset");
         Ok(())
     }
