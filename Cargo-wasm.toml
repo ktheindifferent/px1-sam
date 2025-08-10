@@ -57,8 +57,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde-big-array = "0.4"
 sha = "1.0"
 thiserror = "1.0"
+log = "0.4"
 
-[dependencies.cdimage]
-git = "https://github.com/simias/cdimage"
-branch = "master"
-features = ["serde"]
+# Using a fork of cdimage that's WASM-compatible or removing compression support
+# For now, commenting out cdimage and stubbing functionality in wasm.rs
+# [dependencies.cdimage]
+# git = "https://github.com/simias/cdimage"
+# branch = "master"
+# default-features = false
+# features = ["serde"]
