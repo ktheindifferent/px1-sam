@@ -224,6 +224,10 @@ impl PeripheralTrait for GunCon {
             _ => {}
         }
     }
+    
+    fn clone_box(&self) -> Box<dyn PeripheralTrait> {
+        Box::new(self.clone())
+    }
 }
 
 /// GunCon button enumeration

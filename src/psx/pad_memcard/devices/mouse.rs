@@ -179,6 +179,10 @@ impl PeripheralTrait for Mouse {
             _ => {}
         }
     }
+    
+    fn clone_box(&self) -> Box<dyn PeripheralTrait> {
+        Box::new(self.clone())
+    }
 }
 
 /// Mouse button enumeration

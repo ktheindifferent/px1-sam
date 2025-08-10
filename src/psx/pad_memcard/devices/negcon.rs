@@ -222,6 +222,10 @@ impl PeripheralTrait for NeGcon {
             _ => {}
         }
     }
+    
+    fn clone_box(&self) -> Box<dyn PeripheralTrait> {
+        Box::new(self.clone())
+    }
 }
 
 /// NeGcon button enumeration
