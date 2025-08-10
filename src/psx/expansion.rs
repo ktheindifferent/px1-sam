@@ -10,7 +10,7 @@ use super::{AccessWidth, Addressable, CycleCount, Psx};
 use std::collections::HashMap;
 
 /// Expansion port device types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExpansionDevice {
     None,
     ParallelPort,
@@ -98,7 +98,7 @@ impl ExpansionPort {
                 self.load_parallel_port(offset)
             }
             ExpansionDevice::DevelopmentCart => {
-                self.load_dev_cart(offset)
+                self.read_dev_cart(offset)
             }
             ExpansionDevice::ActionReplay | ExpansionDevice::GameShark => {
                 self.load_cheat_device(offset)
@@ -170,8 +170,8 @@ impl ExpansionPort {
         }
     }
 
-    // Development cartridge implementation
-    fn load_dev_cart<T: Addressable>(&self, offset: u32) -> T {
+    // Development cartridge implementation - read from ROM
+    fn read_dev_cart<T: Addressable>(&self, offset: u32) -> T {
         if let Some(ref rom) = self.dev_cart_rom {
             let offset = offset as usize;
             if offset < rom.len() {

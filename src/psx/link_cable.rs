@@ -284,7 +284,7 @@ impl LinkCable {
                 self.status |= 0x0004; // TX empty
                 
                 if self.tx_interrupt {
-                    irq = irq::IrqState::Triggered(irq::Interrupt::Serial);
+                    irq = irq::IrqState::Active;
                 }
             }
         }
@@ -297,7 +297,7 @@ impl LinkCable {
                     self.status |= 0x0002; // RX ready
                     
                     if self.rx_interrupt {
-                        irq = irq::IrqState::Triggered(irq::Interrupt::Serial);
+                        irq = irq::IrqState::Active;
                     }
                 }
             }
