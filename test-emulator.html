@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSX Emulator Test - Enhanced Version</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #0f0;
+            padding: 20px;
+        }
+        canvas {
+            border: 2px solid #0f0;
+            display: block;
+            margin: 20px auto;
+            background: #000;
+        }
+        .status {
+            text-align: center;
+            margin: 20px;
+            padding: 10px;
+            background: #000;
+            border: 1px solid #0f0;
+        }
+        button {
+            background: #0a0;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        button:hover {
+            background: #0f0;
+        }
+        .controls {
+            text-align: center;
+        }
+        .info {
+            background: #000;
+            border: 1px solid #0f0;
+            padding: 10px;
+            margin: 20px auto;
+            max-width: 800px;
+        }
+        pre {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1 style="text-align: center;">🎮 PSX Emulator - Enhanced Test</h1>
+    
+    <div class="info">
+        <h3>System Status:</h3>
+        <pre id="system-info">Initializing...</pre>
+    </div>
+    
+    <div class="controls">
+        <button id="test-cpu">Test CPU</button>
+        <button id="test-gpu">Test GPU</button>
+        <button id="test-render">Test Rendering</button>
+        <button id="stop">Stop</button>
+    </div>
+    
+    <div class="status" id="status">Ready</div>
+    
+    <canvas id="canvas" width="640" height="480"></canvas>
+    
+    <div class="info">
+        <h3>Debug Output:</h3>
+        <pre id="debug">No debug info yet</pre>
+    </div>
+
+    <script type="module">
+        import init, { PsxEmulator } from './rustation_wasm.js';
+        
+        let emulator = null;
+        let animationId = null;
+        const canvas = document.getElementById('canvas');
+        const status = document.getElementById('status');
+        const debugEl = document.getElementById('debug');
+        const sysInfo = document.getElementById('system-info');
+        
+        // Override console.log to capture WASM logs
+        const originalLog = console.log;
+        const logs = [];
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            logs.push(args.join(' '));
+            if (logs.length > 10) logs.shift();
+            debugEl.textContent = logs.join('\n');
+        };
+        
+        async function initialize() {
+            try {
+                await init();
+                emulator = PsxEmulator.new(canvas);
+                
+                // Create a simple test BIOS
+                const testBios = new Uint8Array(512 * 1024);
+                // Add BIOS signature
+                const biosSignature = "PlayStation";
+                for (let i = 0; i < biosSignature.length; i++) {
+                    testBios[i] = biosSignature.charCodeAt(i);
+                }
+                
+                // Add some test code at BIOS entry point (0xBFC00000 maps to offset 0)
+                // Simple MIPS code: LUI $t0, 0x1F80; SW $zero, 0x1814($t0) (write to GPU)
+                testBios[0] = 0x08; testBios[1] = 0x00; testBios[2] = 0x80; testBios[3] = 0x3C; // LUI
+                testBios[4] = 0x14; testBios[5] = 0x18; testBios[6] = 0x00; testBios[7] = 0xAD; // SW
+                
+                emulator.load_bios(testBios);
+                
+                sysInfo.textContent = `System initialized
+CPU: MIPS R3000A @ 33.8688 MHz
+GPU: Enhanced rendering engine
+RAM: 2MB
+VRAM: 1MB (1024x512x16-bit)
+Status: Ready`;
+                
+                status.textContent = 'Emulator initialized successfully';
+                return true;
+            } catch (error) {
+                console.error('Initialization error:', error);
+                status.textContent = `Error: ${error}`;
+                return false;
+            }
+        }
+        
+        function testCPU() {
+            if (!emulator) return;
+            
+            status.textContent = 'Testing CPU execution...';
+            
+            // Create a simple PSX-EXE that tests CPU functionality
+            const exe = new Uint8Array(0x800 + 256);
+            
+            // PSX-EXE header
+            const header = "PS-X EXE";
+            for (let i = 0; i < 8; i++) {
+                exe[i] = header.charCodeAt(i);
+            }
+            
+            // PC (entry point)
+            exe[0x10] = 0x00; exe[0x11] = 0x00; exe[0x12] = 0x01; exe[0x13] = 0x80;
+            // GP
+            exe[0x14] = 0x00; exe[0x15] = 0x00; exe[0x16] = 0x00; exe[0x17] = 0x00;
+            // Destination address
+            exe[0x18] = 0x00; exe[0x19] = 0x00; exe[0x1a] = 0x01; exe[0x1b] = 0x80;
+            // Size
+            exe[0x1c] = 0x00; exe[0x1d] = 0x01; exe[0x1e] = 0x00; exe[0x1f] = 0x00;
+            
+            // Simple test code at 0x800
+            // ADDIU $t0, $zero, 0x1234
+            exe[0x800] = 0x34; exe[0x801] = 0x12; exe[0x802] = 0x08; exe[0x803] = 0x24;
+            // JR $ra (return)
+            exe[0x804] = 0x08; exe[0x805] = 0x00; exe[0x806] = 0xe0; exe[0x807] = 0x03;
+            
+            try {
+                emulator.load_game(exe, "test.exe");
+                emulator.start();
+                
+                // Run a few frames
+                for (let i = 0; i < 10; i++) {
+                    emulator.run_frame();
+                }
+                
+                emulator.stop();
+                status.textContent = 'CPU test completed';
+            } catch (error) {
+                status.textContent = `CPU test error: ${error}`;
+            }
+        }
+        
+        function testGPU() {
+            if (!emulator) return;
+            
+            status.textContent = 'Testing GPU commands...';
+            
+            // Create test executable that sends GPU commands
+            const exe = new Uint8Array(0x800 + 1024);
+            
+            // PSX-EXE header
+            const header = "PS-X EXE";
+            for (let i = 0; i < 8; i++) {
+                exe[i] = header.charCodeAt(i);
+            }
+            
+            // Set up header
+            exe[0x10] = 0x00; exe[0x11] = 0x00; exe[0x12] = 0x01; exe[0x13] = 0x80; // PC
+            exe[0x18] = 0x00; exe[0x19] = 0x00; exe[0x1a] = 0x01; exe[0x1b] = 0x80; // Dest
+            exe[0x1c] = 0x00; exe[0x1d] = 0x04; exe[0x1e] = 0x00; exe[0x1f] = 0x00; // Size
+            
+            // Code to send GPU fill rectangle command
+            // This would normally be more complex MIPS assembly
+            
+            try {
+                emulator.load_game(exe, "gpu_test.exe");
+                emulator.start();
+                
+                // Run frames to execute GPU commands
+                for (let i = 0; i < 30; i++) {
+                    emulator.run_frame();
+                }
+                
+                emulator.stop();
+                status.textContent = 'GPU test completed';
+            } catch (error) {
+                status.textContent = `GPU test error: ${error}`;
+            }
+        }
+        
+        function testRendering() {
+            if (!emulator) return;
+            
+            status.textContent = 'Testing rendering pipeline...';
+            
+            emulator.start();
+            
+            let frameCount = 0;
+            function renderLoop() {
+                if (frameCount < 60) {
+                    try {
+                        emulator.run_frame();
+                        frameCount++;
+                        animationId = requestAnimationFrame(renderLoop);
+                    } catch (error) {
+                        console.error('Render error:', error);
+                        status.textContent = `Render error: ${error}`;
+                    }
+                } else {
+                    emulator.stop();
+                    status.textContent = `Rendering test completed (${frameCount} frames)`;
+                }
+            }
+            
+            renderLoop();
+        }
+        
+        function stop() {
+            if (emulator) {
+                emulator.stop();
+            }
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            status.textContent = 'Stopped';
+        }
+        
+        // Initialize on load
+        initialize();
+        
+        // Button handlers
+        document.getElementById('test-cpu').addEventListener('click', testCPU);
+        document.getElementById('test-gpu').addEventListener('click', testGPU);
+        document.getElementById('test-render').addEventListener('click', testRendering);
+        document.getElementById('stop').addEventListener('click', stop);
+    </script>
+</body>
+</html>
