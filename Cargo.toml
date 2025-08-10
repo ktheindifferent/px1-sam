@@ -28,44 +28,28 @@ wasm-opt = false
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = [
-    "console",
-    "Document",
-    "Element",
-    "HtmlCanvasElement",
-    "HtmlElement",
-    "ImageData",
-    "CanvasRenderingContext2d",
-    "Window",
-    "Performance",
-    "AudioContext",
-    "AudioBuffer",
-    "AudioBufferSourceNode",
-    "AudioDestinationNode",
-    "GainNode",
-    "KeyboardEvent",
-    "MouseEvent",
-    "GamepadEvent",
-    "Gamepad",
-    "GamepadButton",
-]}
 console_error_panic_hook = { version = "0.1", optional = true }
 wee_alloc = { version = "0.4", optional = true }
 
-# Core dependencies from main Cargo.toml
-arrayref = "0.3"
-flexbuffers = "2.0"
-fnv = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde-big-array = "0.4"
-sha = "1.0"
-thiserror = "1.0"
-log = "0.4"
-
-# Using a fork of cdimage that's WASM-compatible or removing compression support
-# For now, commenting out cdimage and stubbing functionality in wasm.rs
-# [dependencies.cdimage]
-# git = "https://github.com/simias/cdimage"
-# branch = "master"
-# default-features = false
-# features = ["serde"]
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "console",
+  "Document",
+  "Element",
+  "HtmlCanvasElement",
+  "HtmlElement",
+  "HtmlInputElement",
+  "MouseEvent",
+  "Window",
+  "CanvasRenderingContext2d",
+  "ImageData",
+  "KeyboardEvent",
+  "AudioContext",
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "GainNode",
+  "Gamepad",
+  "GamepadButton",
+  "Navigator",
+]
