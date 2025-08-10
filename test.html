@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PSX WASM Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #000;
+            color: #0f0;
+            padding: 20px;
+        }
+        #status {
+            margin: 20px 0;
+        }
+        canvas {
+            border: 2px solid #0f0;
+            display: block;
+            margin: 20px 0;
+        }
+        button {
+            margin: 5px;
+            padding: 10px;
+            background: #0f0;
+            color: #000;
+            border: none;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        button:hover {
+            background: #0a0;
+        }
+        .error {
+            color: #f00;
+        }
+        .success {
+            color: #0f0;
+        }
+    </style>
+</head>
+<body>
+    <h1>PSX WASM Emulator Test</h1>
+    <div id="status">Loading WASM module...</div>
+    <canvas id="gameCanvas"></canvas>
+    <div>
+        <button id="testBtn">Run Test Pattern</button>
+        <button id="stopBtn">Stop</button>
+    </div>
+    <pre id="log"></pre>
+
+    <script type="module">
+        import init, { PsxEmulator } from './rustation_wasm.js';
+        
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('log');
+        const canvas = document.getElementById('gameCanvas');
+        
+        function log(msg, isError = false) {
+            const time = new Date().toISOString().substr(11, 8);
+            const entry = `[${time}] ${msg}\n`;
+            logEl.textContent += entry;
+            console.log(msg);
+            
+            if (isError) {
+                statusEl.className = 'error';
+                statusEl.textContent = `Error: ${msg}`;
+            } else {
+                statusEl.className = 'success';
+                statusEl.textContent = msg;
+            }
+        }
+        
+        async function initEmulator() {
+            try {
+                log('Initializing WASM module...');
+                await init('./rustation_wasm_bg.wasm');
+                log('WASM module loaded successfully');
+                
+                log('Creating PSX emulator instance...');
+                const emulator = new PsxEmulator('gameCanvas');
+                log('Emulator created successfully');
+                
+                window.emulator = emulator;
+                
+                // Test keyboard handling
+                document.addEventListener('keydown', (e) => {
+                    emulator.handle_keyboard_event(e, true);
+                    log(`Key down: ${e.key} (${e.keyCode})`);
+                });
+                
+                document.addEventListener('keyup', (e) => {
+                    emulator.handle_keyboard_event(e, false);
+                });
+                
+                // Set up test button
+                document.getElementById('testBtn').onclick = () => {
+                    log('Starting test pattern...');
+                    emulator.start();
+                    
+                    let frameCount = 0;
+                    function runFrame() {
+                        if (!emulator.is_running()) {
+                            log('Stopped');
+                            return;
+                        }
+                        
+                        try {
+                            emulator.run_frame();
+                            frameCount++;
+                            
+                            if (frameCount % 60 === 0) {
+                                log(`Running... Frame ${frameCount}`);
+                            }
+                            
+                            requestAnimationFrame(runFrame);
+                        } catch (e) {
+                            log(`Frame error: ${e}`, true);
+                        }
+                    }
+                    
+                    runFrame();
+                };
+                
+                document.getElementById('stopBtn').onclick = () => {
+                    log('Stopping emulator...');
+                    emulator.stop();
+                };
+                
+                log('Ready! Click "Run Test Pattern" to start');
+                
+            } catch (e) {
+                log(`Initialization failed: ${e}`, true);
+            }
+        }
+        
+        initEmulator();
+    </script>
+</body>
+</html>
