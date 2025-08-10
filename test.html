@@ -1,139 +1,383 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>PSX WASM Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSX Emulator - WASM</title>
     <style>
         body {
-            font-family: monospace;
-            background: #000;
-            color: #0f0;
+            font-family: Arial, sans-serif;
+            margin: 0;
             padding: 20px;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
         }
-        #status {
-            margin: 20px 0;
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
         }
-        canvas {
-            border: 2px solid #0f0;
-            display: block;
+        h1 {
+            color: #4CAF50;
+            text-align: center;
+        }
+        .controls {
             margin: 20px 0;
+            padding: 20px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        .file-input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-size: 14px;
+            color: #888;
+        }
+        input[type="file"] {
+            padding: 5px;
+            background-color: #333;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
         }
         button {
-            margin: 5px;
-            padding: 10px;
-            background: #0f0;
-            color: #000;
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
             border: none;
+            border-radius: 4px;
             cursor: pointer;
-            font-family: monospace;
-            font-weight: bold;
+            font-size: 16px;
         }
         button:hover {
-            background: #0a0;
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+        }
+        #canvas {
+            display: block;
+            margin: 20px auto;
+            border: 2px solid #4CAF50;
+            background-color: #000;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            text-align: center;
         }
         .error {
-            color: #f00;
+            color: #f44336;
+            padding: 10px;
+            background-color: rgba(244, 67, 54, 0.1);
+            border-radius: 4px;
+            margin: 10px 0;
         }
         .success {
-            color: #0f0;
+            color: #4CAF50;
+            padding: 10px;
+            background-color: rgba(76, 175, 80, 0.1);
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .instructions {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+        }
+        .instructions h3 {
+            color: #4CAF50;
+            margin-top: 0;
+        }
+        .instructions ul {
+            line-height: 1.8;
+        }
+        .key-mapping {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .key-item {
+            padding: 5px 10px;
+            background-color: #333;
+            border-radius: 4px;
+        }
+        .key {
+            color: #4CAF50;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
-    <h1>PSX WASM Emulator Test</h1>
-    <div id="status">Loading WASM module...</div>
-    <canvas id="gameCanvas"></canvas>
-    <div>
-        <button id="testBtn">Run Test Pattern</button>
-        <button id="stopBtn">Stop</button>
+    <div class="container">
+        <h1>🎮 PlayStation Emulator (WASM)</h1>
+        
+        <div class="controls">
+            <div class="file-input-group">
+                <label for="bios-file">BIOS File (Required):</label>
+                <input type="file" id="bios-file" accept=".bin">
+            </div>
+            
+            <div class="file-input-group">
+                <label for="game-file">Game File (PSX-EXE or BIN):</label>
+                <input type="file" id="game-file" accept=".exe,.bin">
+            </div>
+            
+            <div class="file-input-group">
+                <label for="cue-file">CUE File (Optional for BIN):</label>
+                <input type="file" id="cue-file" accept=".cue">
+            </div>
+            
+            <button id="load-btn">Load & Start</button>
+            <button id="stop-btn" disabled>Stop</button>
+            <button id="reset-btn" disabled>Reset</button>
+        </div>
+        
+        <div class="status" id="status">
+            Ready to load BIOS and game files
+        </div>
+        
+        <canvas id="canvas" width="640" height="480"></canvas>
+        
+        <div class="instructions">
+            <h3>Instructions</h3>
+            <p><strong>Loading Games:</strong></p>
+            <ul>
+                <li>First, select a PlayStation BIOS file (e.g., scph1001.bin)</li>
+                <li>Then select your game file:
+                    <ul>
+                        <li><strong>PSX-EXE:</strong> Homebrew executables (single .exe file)</li>
+                        <li><strong>BIN only:</strong> Raw disc image (will attempt auto-detection)</li>
+                        <li><strong>CUE + BIN:</strong> Full disc image with track info (select both files)</li>
+                    </ul>
+                </li>
+                <li>Click "Load & Start" to begin emulation</li>
+            </ul>
+            
+            <p><strong>Controls:</strong></p>
+            <div class="key-mapping">
+                <div class="key-item"><span class="key">Arrow Keys</span> - D-Pad</div>
+                <div class="key-item"><span class="key">X</span> - Cross (✕)</div>
+                <div class="key-item"><span class="key">Z</span> - Circle (○)</div>
+                <div class="key-item"><span class="key">S</span> - Square (□)</div>
+                <div class="key-item"><span class="key">A</span> - Triangle (△)</div>
+                <div class="key-item"><span class="key">Q/W</span> - L1/R1</div>
+                <div class="key-item"><span class="key">E/R</span> - L2/R2</div>
+                <div class="key-item"><span class="key">Enter</span> - Start</div>
+                <div class="key-item"><span class="key">Shift</span> - Select</div>
+            </div>
+        </div>
     </div>
-    <pre id="log"></pre>
-
+    
     <script type="module">
         import init, { PsxEmulator } from './rustation_wasm.js';
         
-        const statusEl = document.getElementById('status');
-        const logEl = document.getElementById('log');
-        const canvas = document.getElementById('gameCanvas');
+        let emulator = null;
+        let animationId = null;
+        let biosData = null;
+        let gameData = null;
+        let cueData = null;
         
-        function log(msg, isError = false) {
-            const time = new Date().toISOString().substr(11, 8);
-            const entry = `[${time}] ${msg}\n`;
-            logEl.textContent += entry;
-            console.log(msg);
-            
-            if (isError) {
-                statusEl.className = 'error';
-                statusEl.textContent = `Error: ${msg}`;
-            } else {
-                statusEl.className = 'success';
-                statusEl.textContent = msg;
+        const canvas = document.getElementById('canvas');
+        const statusEl = document.getElementById('status');
+        const loadBtn = document.getElementById('load-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const biosFile = document.getElementById('bios-file');
+        const gameFile = document.getElementById('game-file');
+        const cueFile = document.getElementById('cue-file');
+        
+        function setStatus(message, type = 'normal') {
+            statusEl.textContent = message;
+            statusEl.className = 'status';
+            if (type === 'error') {
+                statusEl.classList.add('error');
+            } else if (type === 'success') {
+                statusEl.classList.add('success');
             }
+        }
+        
+        async function loadFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(new Uint8Array(e.target.result));
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
         }
         
         async function initEmulator() {
             try {
-                log('Initializing WASM module...');
-                await init('./rustation_wasm_bg.wasm');
-                log('WASM module loaded successfully');
+                setStatus('Initializing WASM module...', 'normal');
+                await init();
                 
-                log('Creating PSX emulator instance...');
-                const emulator = new PsxEmulator('gameCanvas');
-                log('Emulator created successfully');
+                setStatus('Creating emulator instance...', 'normal');
+                emulator = PsxEmulator.new(canvas);
                 
-                window.emulator = emulator;
+                if (biosData) {
+                    setStatus('Loading BIOS...', 'normal');
+                    emulator.load_bios(biosData);
+                    setStatus('BIOS loaded successfully', 'success');
+                }
                 
-                // Test keyboard handling
+                if (gameData) {
+                    const gameFileName = gameFile.files[0].name;
+                    
+                    // Check if we have both CUE and BIN files
+                    if (cueData && gameFileName.toLowerCase().endsWith('.bin')) {
+                        setStatus('Loading CUE/BIN game...', 'normal');
+                        emulator.load_game_with_bin(cueData, gameData);
+                        setStatus('CUE/BIN game loaded successfully', 'success');
+                    } else {
+                        setStatus('Loading game...', 'normal');
+                        emulator.load_game(gameData, gameFileName);
+                        setStatus('Game loaded successfully', 'success');
+                    }
+                }
+                
+                // Set up keyboard controls
                 document.addEventListener('keydown', (e) => {
-                    emulator.handle_keyboard_event(e, true);
-                    log(`Key down: ${e.key} (${e.keyCode})`);
+                    if (emulator) {
+                        emulator.handle_keyboard_event(e, true);
+                    }
                 });
                 
                 document.addEventListener('keyup', (e) => {
-                    emulator.handle_keyboard_event(e, false);
+                    if (emulator) {
+                        emulator.handle_keyboard_event(e, false);
+                    }
                 });
                 
-                // Set up test button
-                document.getElementById('testBtn').onclick = () => {
-                    log('Starting test pattern...');
-                    emulator.start();
-                    
-                    let frameCount = 0;
-                    function runFrame() {
-                        if (!emulator.is_running()) {
-                            log('Stopped');
-                            return;
-                        }
-                        
-                        try {
-                            emulator.run_frame();
-                            frameCount++;
-                            
-                            if (frameCount % 60 === 0) {
-                                log(`Running... Frame ${frameCount}`);
+                // Set up gamepad polling
+                setInterval(() => {
+                    if (emulator) {
+                        const gamepads = navigator.getGamepads();
+                        for (const gamepad of gamepads) {
+                            if (gamepad) {
+                                emulator.handle_gamepad(gamepad);
                             }
-                            
-                            requestAnimationFrame(runFrame);
-                        } catch (e) {
-                            log(`Frame error: ${e}`, true);
                         }
                     }
-                    
-                    runFrame();
-                };
+                }, 16); // Poll at 60Hz
                 
-                document.getElementById('stopBtn').onclick = () => {
-                    log('Stopping emulator...');
-                    emulator.stop();
-                };
-                
-                log('Ready! Click "Run Test Pattern" to start');
-                
-            } catch (e) {
-                log(`Initialization failed: ${e}`, true);
+                return true;
+            } catch (error) {
+                console.error('Initialization error:', error);
+                setStatus(`Error: ${error}`, 'error');
+                return false;
             }
         }
         
-        initEmulator();
+        function runFrame() {
+            if (emulator && emulator.is_running()) {
+                try {
+                    emulator.run_frame();
+                    animationId = requestAnimationFrame(runFrame);
+                } catch (error) {
+                    console.error('Frame execution error:', error);
+                    setStatus(`Emulation error: ${error}`, 'error');
+                    stopEmulation();
+                }
+            }
+        }
+        
+        async function startEmulation() {
+            if (!biosData) {
+                setStatus('Please select a BIOS file first', 'error');
+                return;
+            }
+            
+            if (!gameData) {
+                setStatus('Please select a game file', 'error');
+                return;
+            }
+            
+            const success = await initEmulator();
+            if (success) {
+                emulator.start();
+                loadBtn.disabled = true;
+                stopBtn.disabled = false;
+                resetBtn.disabled = false;
+                setStatus('Emulation running', 'success');
+                runFrame();
+            }
+        }
+        
+        function stopEmulation() {
+            if (emulator) {
+                emulator.stop();
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }
+                loadBtn.disabled = false;
+                stopBtn.disabled = true;
+                resetBtn.disabled = true;
+                setStatus('Emulation stopped', 'normal');
+            }
+        }
+        
+        function resetEmulation() {
+            if (emulator) {
+                try {
+                    emulator.reset();
+                    setStatus('Emulator reset', 'success');
+                } catch (error) {
+                    setStatus(`Reset error: ${error}`, 'error');
+                }
+            }
+        }
+        
+        biosFile.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                try {
+                    biosData = await loadFile(file);
+                    setStatus(`BIOS file loaded: ${file.name} (${biosData.length} bytes)`, 'success');
+                } catch (error) {
+                    setStatus(`Failed to load BIOS: ${error}`, 'error');
+                }
+            }
+        });
+        
+        gameFile.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                try {
+                    gameData = await loadFile(file);
+                    setStatus(`Game file loaded: ${file.name} (${gameData.length} bytes)`, 'success');
+                } catch (error) {
+                    setStatus(`Failed to load game: ${error}`, 'error');
+                }
+            }
+        });
+        
+        cueFile.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                try {
+                    cueData = await loadFile(file);
+                    setStatus(`CUE file loaded: ${file.name} (${cueData.length} bytes)`, 'success');
+                } catch (error) {
+                    setStatus(`Failed to load CUE: ${error}`, 'error');
+                }
+            }
+        });
+        
+        loadBtn.addEventListener('click', startEmulation);
+        stopBtn.addEventListener('click', stopEmulation);
+        resetBtn.addEventListener('click', resetEmulation);
     </script>
 </body>
 </html>
