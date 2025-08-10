@@ -9,7 +9,7 @@ keywords = ["emulator", "playstation"]
 
 [lib]
 name = "rustation_ng_retro"
-crate-type = ["dylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 # Enable debugger support

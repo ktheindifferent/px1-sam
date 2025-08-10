@@ -1,2 +1,7 @@
 /target
 **/*.rs.bk
+
+# WASM build artifacts
+wasi-sdk-*
+build.log
+wasm-pkg/

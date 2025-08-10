@@ -18,7 +18,30 @@ if ! command -v wasm-opt &> /dev/null; then
 fi
 
 echo "Building WASM module..."
-wasm-pack build --target web --out-dir wasm-pkg --manifest-path Cargo-wasm.toml
+
+# Set up WASI SDK environment if available
+if [ -d "wasi-sdk-20.0" ]; then
+    export WASI_SDK_PATH=$PWD/wasi-sdk-20.0
+    export CC_wasm32_unknown_unknown=$WASI_SDK_PATH/bin/clang
+    export AR_wasm32_unknown_unknown=$WASI_SDK_PATH/bin/llvm-ar
+    export CFLAGS_wasm32_unknown_unknown="--sysroot=$WASI_SDK_PATH/share/wasi-sysroot"
+    echo "Using WASI SDK at $WASI_SDK_PATH"
+fi
+
+# Temporarily swap Cargo.toml files for wasm-pack
+if [ -f "Cargo.toml" ]; then
+    mv Cargo.toml Cargo.toml.main
+fi
+mv Cargo-wasm.toml Cargo.toml
+
+# Build with wasm-pack
+wasm-pack build --target web --out-dir wasm-pkg
+
+# Restore original Cargo.toml
+mv Cargo.toml Cargo-wasm.toml
+if [ -f "Cargo.toml.main" ]; then
+    mv Cargo.toml.main Cargo.toml
+fi
 
 echo "Optimizing WASM binary..."
 wasm-opt -Oz \
