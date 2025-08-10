@@ -544,6 +544,41 @@ This comprehensive documentation covers all major components of the Rustation-NG
 *Platform Support: Linux ✅ macOS ✅ Windows ✅*
 *Hardware Coverage: COMPLETE - All PlayStation hardware implemented!*
 
+## WebAssembly Support (NEW)
+
+### WASM Implementation
+The emulator now supports WebAssembly compilation for running directly in web browsers with HTML5 playback.
+
+#### Added Features:
+- **WebAssembly Module** (`src/wasm.rs`): Browser-compatible emulator interface
+- **Build Configuration** (`Cargo-wasm.toml`): Optimized WASM compilation settings
+- **HTML5 Interface** (`index.html`): Full-featured web UI with modern design
+- **Build Automation** (`build-wasm.sh`): Automated WASM compilation script
+- **Browser Bridge** (`src/wasm_bridge.rs`): Interface between PSX core and WASM
+- **Documentation** (`WASM_BUILD_INSTRUCTIONS.md`): Comprehensive build/test guide
+
+#### Browser Features:
+- Canvas-based rendering with CanvasRenderingContext2d
+- Web Audio API for sound output
+- Gamepad API for controller support
+- Keyboard input mapping to PSX controls
+- Save state management in browser memory
+- Real-time FPS and performance monitoring
+- File API for loading BIOS and game files
+
+#### Quick Start:
+```bash
+./build-wasm.sh      # Build WASM module
+./test-wasm.sh       # Start test server
+# Open http://localhost:8000 in browser
+```
+
+#### Browser Compatibility:
+- Chrome/Chromium 90+
+- Firefox 89+
+- Safari 15+
+- Edge 90+
+
 ## 🎉 Implementation Complete!
 
 ### All Hardware Now Supported:

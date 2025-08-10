@@ -30,6 +30,8 @@ glitchy and incomplete. Some notable features of this project are:
 
 * GDB-based debugger interface.
 
+* **WebAssembly support for HTML5 playback in modern web browsers.**
+
 * Readable and well documented code, hopefully.
 
 ## Build
@@ -37,6 +39,10 @@ glitchy and incomplete. Some notable features of this project are:
 You need to [install a Rust build environment](https://www.rust-lang.org/).
 Normally it's fairly straightforward, just follow the instructions on Rust's
 website.
+
+### WebAssembly Build
+
+To build Rustation for web browsers, see [WASM_BUILD_INSTRUCTIONS.md](WASM_BUILD_INSTRUCTIONS.md) for detailed instructions on compiling to WebAssembly and testing in HTML5.
 
 ### macOS-specific requirements
 
