@@ -14,7 +14,7 @@ impl Response {
     /// Convert to tuple format for compatibility
     pub fn to_tuple(self) -> (u8, DsrState) {
         let dsr = if self.request_dsr {
-            DsrState::Pending(100) // Standard DSR delay
+            DsrState::Pending(100, 100) // Standard DSR delay (start, duration)
         } else {
             DsrState::Idle
         };
