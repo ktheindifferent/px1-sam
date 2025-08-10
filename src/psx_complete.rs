@@ -833,6 +833,14 @@ impl Cop0 {
         self.regs[12] = (self.regs[12] & !0xf) | (mode >> 2);
     }
     
+    pub fn read_reg(&self, index: u8) -> u32 {
+        self.regs[index as usize]
+    }
+    
+    pub fn write_reg(&mut self, index: u8, val: u32) {
+        self.set_reg(index, val);
+    }
+    
     pub fn interrupt_pending(&self, _irq: &InterruptState) -> bool {
         let status = self.regs[12];
         let cause = self.regs[13];
@@ -1212,30 +1220,48 @@ impl Gpu {
         
         buffer.resize(width * height * 4, 0);
         
-        let start_x = self.display_x as usize;
-        let start_y = self.display_y as usize;
+        // Check if VRAM has any non-zero data
+        let has_data = self.vram.iter().any(|&p| p != 0);
         
-        for y in 0..height {
-            for x in 0..width {
-                let vram_x = (start_x + x) & 0x3ff;
-                let vram_y = (start_y + y) & 0x1ff;
-                let vram_idx = vram_y * 1024 + vram_x;
-                
-                let pixel = if vram_idx < self.vram.len() {
-                    self.vram[vram_idx]
-                } else {
-                    0
-                };
-                
-                let r = ((pixel & 0x1f) << 3) as u8;
-                let g = (((pixel >> 5) & 0x1f) << 3) as u8;
-                let b = (((pixel >> 10) & 0x1f) << 3) as u8;
-                
-                let buffer_idx = (y * width + x) * 4;
-                buffer[buffer_idx] = r;
-                buffer[buffer_idx + 1] = g;
-                buffer[buffer_idx + 2] = b;
-                buffer[buffer_idx + 3] = 255;
+        if !has_data {
+            // Display a test pattern if no data in VRAM
+            for y in 0..height {
+                for x in 0..width {
+                    let buffer_idx = (y * width + x) * 4;
+                    // Create a gradient test pattern
+                    buffer[buffer_idx] = ((x * 255) / width) as u8;     // R
+                    buffer[buffer_idx + 1] = ((y * 255) / height) as u8; // G  
+                    buffer[buffer_idx + 2] = 128;                        // B
+                    buffer[buffer_idx + 3] = 255;                        // A
+                }
+            }
+        } else {
+            // Normal VRAM rendering
+            let start_x = self.display_x as usize;
+            let start_y = self.display_y as usize;
+            
+            for y in 0..height {
+                for x in 0..width {
+                    let vram_x = (start_x + x) & 0x3ff;
+                    let vram_y = (start_y + y) & 0x1ff;
+                    let vram_idx = vram_y * 1024 + vram_x;
+                    
+                    let pixel = if vram_idx < self.vram.len() {
+                        self.vram[vram_idx]
+                    } else {
+                        0
+                    };
+                    
+                    let r = ((pixel & 0x1f) << 3) as u8;
+                    let g = (((pixel >> 5) & 0x1f) << 3) as u8;
+                    let b = (((pixel >> 10) & 0x1f) << 3) as u8;
+                    
+                    let buffer_idx = (y * width + x) * 4;
+                    buffer[buffer_idx] = r;
+                    buffer[buffer_idx + 1] = g;
+                    buffer[buffer_idx + 2] = b;
+                    buffer[buffer_idx + 3] = 255;
+                }
             }
         }
     }
@@ -1577,17 +1603,8 @@ impl Psx {
                 self.cpu.pc = self.cpu.next_pc;
                 self.cpu.next_pc = self.cpu.pc.wrapping_add(4);
                 
-                // Very basic instruction execution
-                let opcode = (instruction >> 26) & 0x3f;
-                if opcode == 0 {
-                    // R-type instruction
-                    let funct = instruction & 0x3f;
-                    if funct == 0x08 {
-                        // JR
-                        let rs = ((instruction >> 21) & 0x1f) as usize;
-                        self.cpu.next_pc = self.cpu.regs[rs];
-                    }
-                }
+                // Execute the instruction
+                self.execute_cpu_instruction(instruction);
                 
                 self.cycle_counter += 1;
                 
@@ -1818,6 +1835,280 @@ impl Psx {
     
     pub fn get_framebuffer(&self, buffer: &mut Vec<u8>) {
         self.gpu.get_framebuffer(buffer);
+    }
+    
+    fn execute_cpu_instruction(&mut self, instruction: u32) {
+        let opcode = (instruction >> 26) & 0x3f;
+        let rs = ((instruction >> 21) & 0x1f) as usize;
+        let rt = ((instruction >> 16) & 0x1f) as usize;
+        let rd = ((instruction >> 11) & 0x1f) as usize;
+        let imm = instruction & 0xffff;
+        let imm_se = (imm as i16) as i32 as u32;
+        
+        match opcode {
+            0x00 => {
+                // R-type instructions
+                let funct = instruction & 0x3f;
+                match funct {
+                    0x00 => {
+                        // SLL
+                        let sa = ((instruction >> 6) & 0x1f) as u32;
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rt] << sa;
+                        }
+                    }
+                    0x02 => {
+                        // SRL
+                        let sa = ((instruction >> 6) & 0x1f) as u32;
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rt] >> sa;
+                        }
+                    }
+                    0x08 => {
+                        // JR
+                        self.cpu.next_pc = self.cpu.regs[rs];
+                    }
+                    0x09 => {
+                        // JALR
+                        let ra = self.cpu.next_pc;
+                        self.cpu.next_pc = self.cpu.regs[rs];
+                        if rd != 0 {
+                            self.cpu.regs[rd] = ra;
+                        }
+                    }
+                    0x20 => {
+                        // ADD
+                        if rd != 0 {
+                            let result = (self.cpu.regs[rs] as i32).wrapping_add(self.cpu.regs[rt] as i32);
+                            self.cpu.regs[rd] = result as u32;
+                        }
+                    }
+                    0x21 => {
+                        // ADDU
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rs].wrapping_add(self.cpu.regs[rt]);
+                        }
+                    }
+                    0x23 => {
+                        // SUBU
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rs].wrapping_sub(self.cpu.regs[rt]);
+                        }
+                    }
+                    0x24 => {
+                        // AND
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rs] & self.cpu.regs[rt];
+                        }
+                    }
+                    0x25 => {
+                        // OR
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rs] | self.cpu.regs[rt];
+                        }
+                    }
+                    0x26 => {
+                        // XOR
+                        if rd != 0 {
+                            self.cpu.regs[rd] = self.cpu.regs[rs] ^ self.cpu.regs[rt];
+                        }
+                    }
+                    0x27 => {
+                        // NOR
+                        if rd != 0 {
+                            self.cpu.regs[rd] = !(self.cpu.regs[rs] | self.cpu.regs[rt]);
+                        }
+                    }
+                    0x2a => {
+                        // SLT
+                        if rd != 0 {
+                            let val = if (self.cpu.regs[rs] as i32) < (self.cpu.regs[rt] as i32) { 1 } else { 0 };
+                            self.cpu.regs[rd] = val;
+                        }
+                    }
+                    0x2b => {
+                        // SLTU
+                        if rd != 0 {
+                            let val = if self.cpu.regs[rs] < self.cpu.regs[rt] { 1 } else { 0 };
+                            self.cpu.regs[rd] = val;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            0x02 => {
+                // J
+                self.cpu.next_pc = (self.cpu.pc & 0xf0000000) | ((instruction & 0x3ffffff) << 2);
+            }
+            0x03 => {
+                // JAL
+                self.cpu.regs[31] = self.cpu.next_pc;
+                self.cpu.next_pc = (self.cpu.pc & 0xf0000000) | ((instruction & 0x3ffffff) << 2);
+            }
+            0x04 => {
+                // BEQ
+                if self.cpu.regs[rs] == self.cpu.regs[rt] {
+                    self.cpu.next_pc = self.cpu.pc.wrapping_add(imm_se << 2);
+                }
+            }
+            0x05 => {
+                // BNE
+                if self.cpu.regs[rs] != self.cpu.regs[rt] {
+                    self.cpu.next_pc = self.cpu.pc.wrapping_add(imm_se << 2);
+                }
+            }
+            0x06 => {
+                // BLEZ
+                if (self.cpu.regs[rs] as i32) <= 0 {
+                    self.cpu.next_pc = self.cpu.pc.wrapping_add(imm_se << 2);
+                }
+            }
+            0x07 => {
+                // BGTZ
+                if (self.cpu.regs[rs] as i32) > 0 {
+                    self.cpu.next_pc = self.cpu.pc.wrapping_add(imm_se << 2);
+                }
+            }
+            0x08 => {
+                // ADDI
+                if rt != 0 {
+                    let result = (self.cpu.regs[rs] as i32).wrapping_add(imm_se as i32);
+                    self.cpu.regs[rt] = result as u32;
+                }
+            }
+            0x09 => {
+                // ADDIU
+                if rt != 0 {
+                    self.cpu.regs[rt] = self.cpu.regs[rs].wrapping_add(imm_se);
+                }
+            }
+            0x0a => {
+                // SLTI
+                if rt != 0 {
+                    let val = if (self.cpu.regs[rs] as i32) < (imm_se as i32) { 1 } else { 0 };
+                    self.cpu.regs[rt] = val;
+                }
+            }
+            0x0b => {
+                // SLTIU
+                if rt != 0 {
+                    let val = if self.cpu.regs[rs] < imm_se { 1 } else { 0 };
+                    self.cpu.regs[rt] = val;
+                }
+            }
+            0x0c => {
+                // ANDI
+                if rt != 0 {
+                    self.cpu.regs[rt] = self.cpu.regs[rs] & (imm as u32);
+                }
+            }
+            0x0d => {
+                // ORI
+                if rt != 0 {
+                    self.cpu.regs[rt] = self.cpu.regs[rs] | (imm as u32);
+                }
+            }
+            0x0e => {
+                // XORI
+                if rt != 0 {
+                    self.cpu.regs[rt] = self.cpu.regs[rs] ^ (imm as u32);
+                }
+            }
+            0x0f => {
+                // LUI
+                if rt != 0 {
+                    self.cpu.regs[rt] = (imm as u32) << 16;
+                }
+            }
+            0x10 => {
+                // COP0
+                let cop_op = (instruction >> 21) & 0x1f;
+                match cop_op {
+                    0x00 => {
+                        // MFC0
+                        if rt != 0 {
+                            let val = self.cop0.read_reg(rd as u8);
+                            self.cpu.regs[rt] = val;
+                        }
+                    }
+                    0x04 => {
+                        // MTC0
+                        self.cop0.write_reg(rd as u8, self.cpu.regs[rt]);
+                    }
+                    0x10 => {
+                        // RFE
+                        if instruction & 0x3f == 0x10 {
+                            self.cop0.rfe();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            0x20 => {
+                // LB
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                if rt != 0 {
+                    if let Ok(val) = self.load8(addr) {
+                        self.cpu.regs[rt] = (val as i8) as i32 as u32;
+                    }
+                }
+            }
+            0x21 => {
+                // LH
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                if rt != 0 {
+                    if let Ok(val) = self.load16(addr) {
+                        self.cpu.regs[rt] = (val as i16) as i32 as u32;
+                    }
+                }
+            }
+            0x23 => {
+                // LW
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                if rt != 0 {
+                    if let Ok(val) = self.load32(addr) {
+                        self.cpu.regs[rt] = val;
+                    }
+                }
+            }
+            0x24 => {
+                // LBU
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                if rt != 0 {
+                    if let Ok(val) = self.load8(addr) {
+                        self.cpu.regs[rt] = val as u32;
+                    }
+                }
+            }
+            0x25 => {
+                // LHU
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                if rt != 0 {
+                    if let Ok(val) = self.load16(addr) {
+                        self.cpu.regs[rt] = val as u32;
+                    }
+                }
+            }
+            0x28 => {
+                // SB
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                let _ = self.store8(addr, self.cpu.regs[rt] as u8);
+            }
+            0x29 => {
+                // SH
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                let _ = self.store16(addr, self.cpu.regs[rt] as u16);
+            }
+            0x2b => {
+                // SW
+                let addr = self.cpu.regs[rs].wrapping_add(imm_se);
+                let _ = self.store32(addr, self.cpu.regs[rt]);
+            }
+            _ => {}
+        }
+        
+        // R0 is always 0
+        self.cpu.regs[0] = 0;
     }
 }
 
