@@ -4,6 +4,9 @@
 mod error_handling_tests;
 
 #[cfg(test)]
+mod error_traits_tests;
+
+#[cfg(test)]
 mod save_state_tests;
 
 #[cfg(test)]
@@ -17,3 +20,6 @@ mod memory_safety_tests;
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod wasm_minimal_tests;

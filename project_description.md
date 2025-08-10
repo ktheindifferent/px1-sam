@@ -81,6 +81,30 @@ This is a demonstration implementation showing the WASM framework is functional.
 
 The framework is ready for integration with the full PSX emulation modules once the cdimage dependency issue is resolved.
 
+### Build System Improvements
+**Date:** 2025-08-10
+
+#### Compilation Fixes
+Fixed several compilation errors in the project:
+
+**Dependencies Added:**
+- Added `flexbuffers` dependency for serialization support in box_array module
+
+**Error Fixes:**
+1. **PsxError Issues**: Fixed incorrect error variant usage in `psx_complete.rs`
+   - Changed from non-existent `PsxError::InvalidBios` to `PsxError::invalid_bios()`
+   - Changed from non-existent `PsxError::InvalidExe` to `PsxError::invalid_exe()`
+
+2. **Unused Variable Warnings**: Prefixed unused parameters with underscore:
+   - `irq` → `_irq` in interrupt_pending()
+   - `command` → `_command` in execute()
+   - `cue_content` → `_cue_content` in wasm_unified.rs
+
+#### Test Status
+- All lib tests now pass successfully (2 passing tests)
+- Tests run without compilation errors
+- Minor warnings remain but don't affect functionality
+
 ### Full PSX Emulation Integration Attempt
 **Date:** 2025-08-10
 
