@@ -249,12 +249,20 @@
                 // Set up keyboard controls
                 document.addEventListener('keydown', (e) => {
                     if (emulator) {
+                        // Prevent default behavior for game controls
+                        if (['Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                            e.preventDefault();
+                        }
                         emulator.handle_keyboard_event(e, true);
                     }
                 });
                 
                 document.addEventListener('keyup', (e) => {
                     if (emulator) {
+                        // Prevent default behavior for game controls
+                        if (['Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                            e.preventDefault();
+                        }
                         emulator.handle_keyboard_event(e, false);
                     }
                 });
@@ -331,6 +339,7 @@
         function resetEmulation() {
             if (emulator) {
                 try {
+                    console.log('Manual reset triggered');
                     emulator.reset();
                     setStatus('Emulator reset', 'success');
                 } catch (error) {

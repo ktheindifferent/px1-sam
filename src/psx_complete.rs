@@ -1515,6 +1515,13 @@ impl Psx {
         self.frame_done = false;
     }
     
+    pub fn init_with_disc(&mut self) -> Result<()> {
+        // Initialize PSX with a disc loaded
+        // The BIOS will handle the actual boot process
+        // For now, just ensure the system is ready without resetting
+        Ok(())
+    }
+    
     pub fn load_bios(&mut self, data: &[u8]) -> Result<()> {
         if data.len() != BIOS_SIZE {
             return Err(PsxError::invalid_bios("Invalid BIOS size"));
