@@ -63,6 +63,16 @@ pub struct MDec {
     dma_transfer_pending: bool,
     /// Cycles until next DMA transfer can occur
     dma_wait_cycles: CycleCount,
+    /// Frame timing for smoother video playback
+    frame_start_cycle: CycleCount,
+    /// Target frame duration in cycles (for 30fps: ~1,118,000 cycles @ 33.8688MHz)
+    target_frame_cycles: CycleCount,
+    /// Accumulated frame timing error for compensation
+    frame_timing_error: i32,
+    /// Number of macroblocks decoded in current frame
+    macroblocks_in_frame: u16,
+    /// Expected macroblocks per frame (typically 330 for 320x240)
+    expected_macroblocks: u16,
 }
 
 impl MDec {
@@ -95,6 +105,11 @@ impl MDec {
             blocks_in_batch: 0,
             dma_transfer_pending: false,
             dma_wait_cycles: 0,
+            frame_start_cycle: 0,
+            target_frame_cycles: 1_118_000, // Default for 30fps
+            frame_timing_error: 0,
+            macroblocks_in_frame: 0,
+            expected_macroblocks: 330, // Default for 320x240
         }
     }
 
@@ -172,6 +187,12 @@ impl MDec {
                             };
                             self.dma_block_line = 0;
                             self.dma_block_column = self.dma_block_line_length;
+                            
+                            // Track frame timing for better pacing
+                            if self.macroblocks_in_frame == 0 {
+                                // Starting a new frame
+                                self.frame_start_cycle = self.decoder_cycle_budget;
+                            }
                         }
                         2 => {
                             // Load quantization matrices
@@ -322,6 +343,17 @@ impl MDec {
             self.state = State::Idle;
             self.command_remaining = 0;
             self.block_index = 0;
+            // Reset pipeline state
+            self.pipeline_cycles = 0;
+            self.idct_cycles = 0;
+            self.rgb_conversion_cycles = 0;
+            self.blocks_in_batch = 0;
+            self.dma_transfer_pending = false;
+            self.dma_wait_cycles = 0;
+            // Reset frame tracking
+            self.frame_start_cycle = 0;
+            self.frame_timing_error = 0;
+            self.macroblocks_in_frame = 0;
         }
 
         self.dma_out_enabled = (control & (1 << 29)) != 0;
@@ -339,6 +371,17 @@ impl MDec {
 
         // Data output format for the current command
         r |= self.command.output_format() << 23;
+        
+        // Current block being processed (bits 16-18)
+        let current_block_bits = match self.current_block {
+            BlockType::Y1 => 1,
+            BlockType::Y2 => 2,
+            BlockType::Y3 => 3,
+            BlockType::Y4 => 4,
+            BlockType::CrMono => 5,
+            BlockType::Cb => 6,
+        };
+        r |= current_block_bits << 16;
 
         r.set_bit(27, self.dma_can_read());
         r.set_bit(28, self.dma_can_write());
@@ -481,10 +524,26 @@ impl MDec {
             };
             
             let total_cycles = base_cycles - pipeline_bonus;
-            self.decoder_cycle_budget -= total_cycles;
-            self.idct_cycles = total_cycles / 2; // IDCT stage takes half the time
+            
+            // Apply frame pacing adjustment
+            let pacing_adjustment = self.calculate_frame_pacing_adjustment();
+            let adjusted_cycles = (total_cycles as i32 + pacing_adjustment).max(128) as CycleCount;
+            
+            self.decoder_cycle_budget -= adjusted_cycles;
+            self.idct_cycles = adjusted_cycles / 2; // IDCT stage takes half the time
             
             self.blocks_in_batch = (self.blocks_in_batch + 1).min(6);
+            
+            // Track macroblocks for frame pacing
+            if finished_block == BlockType::Cb {
+                // Completed a full macroblock (Y1-Y4, Cr, Cb)
+                self.macroblocks_in_frame += 1;
+                
+                // Check if we've completed a frame
+                if self.macroblocks_in_frame >= self.expected_macroblocks {
+                    self.end_frame();
+                }
+            }
 
             if generate_pixels {
                 // We have Y, U and V macroblocks, we can convert the value and generate RGB pixels
@@ -504,6 +563,47 @@ impl MDec {
 
         // We're ready for the next block's coefficients
         self.block_index = 0;
+    }
+    
+    /// Calculate frame pacing adjustment to maintain smooth playback
+    fn calculate_frame_pacing_adjustment(&self) -> i32 {
+        if self.macroblocks_in_frame == 0 {
+            return 0;
+        }
+        
+        // Calculate progress through frame
+        let progress = (self.macroblocks_in_frame as f32) / (self.expected_macroblocks as f32);
+        
+        // Calculate expected cycles at this point
+        let expected_cycles = (self.target_frame_cycles as f32 * progress) as i32;
+        
+        // Calculate actual cycles used
+        let actual_cycles = (self.frame_start_cycle - self.decoder_cycle_budget) as i32;
+        
+        // Calculate timing error
+        let error = expected_cycles - actual_cycles;
+        
+        // Apply proportional correction with damping to avoid oscillation
+        // Positive error means we're behind schedule (need to speed up)
+        // Negative error means we're ahead (need to slow down)
+        let adjustment = -(error / 16); // Gentle correction factor
+        
+        // Clamp adjustment to reasonable range
+        adjustment.max(-64).min(64)
+    }
+    
+    /// End of frame processing
+    fn end_frame(&mut self) {
+        // Calculate frame timing error for next frame
+        let frame_duration = self.frame_start_cycle - self.decoder_cycle_budget;
+        self.frame_timing_error += (self.target_frame_cycles - frame_duration) as i32;
+        
+        // Dampen accumulated error to prevent runaway
+        self.frame_timing_error = (self.frame_timing_error * 7) / 8;
+        
+        // Reset for next frame
+        self.macroblocks_in_frame = 0;
+        self.blocks_in_batch = 0;
     }
 
     fn generate_pixels_rgb15(&mut self, block_type: BlockType) {
@@ -579,10 +679,23 @@ pub fn run(psx: &mut Psx) {
 
     psx.mdec.run(elapsed);
 
-    // Since we don't have any IRQs we don't have to actually schedule an event, so I just set one
-    // at a low frequency here just to prevent the sync counter from overflowing when we're
-    // eventually called.
-    sync::next_event(psx, MDECSYNC, 1_000_000);
+    // Schedule next event based on MDEC state
+    // If we're actively decoding, schedule more frequent updates for better timing accuracy
+    let next_sync = if psx.mdec.is_busy() {
+        // Active decoding - check every ~256 cycles for better frame pacing
+        256
+    } else if psx.mdec.dma_transfer_pending {
+        // DMA transfer pending - check soon
+        64
+    } else if !psx.mdec.input_fifo.is_empty() || !psx.mdec.output_fifo.is_empty() {
+        // FIFOs have data - medium priority
+        512
+    } else {
+        // Idle - low frequency check
+        100_000
+    };
+    
+    sync::next_event(psx, MDECSYNC, next_sync);
 }
 
 pub fn store<T: Addressable>(psx: &mut Psx, off: u32, val: T) {
