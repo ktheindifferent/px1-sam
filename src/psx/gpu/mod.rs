@@ -123,6 +123,8 @@ pub struct Gpu {
     rendering_pipeline: RenderingPipeline,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// Clock multiplier for dynamic GPU clock scaling
+    pub clock_multiplier: f32,
 }
 
 impl Gpu {
@@ -172,6 +174,7 @@ impl Gpu {
             debug_overlay: DebugOverlay::new(),
             rendering_pipeline: RenderingPipeline::new(),
             shader_manager: None,
+            clock_multiplier: 1.0,
         };
 
         gpu.refresh_lines_per_field();
