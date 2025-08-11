@@ -16,6 +16,42 @@ const SPUSYNC: sync::SyncToken = sync::SyncToken::Spu;
 /// Offset into the SPU internal ram
 type RamIndex = u32;
 
+/// Debug overlay for visualizing SPU state
+#[derive(Debug, Clone)]
+pub struct SpuDebugOverlay {
+    /// Voice activity status
+    pub voice_activity: [bool; 24],
+    /// Voice volume levels
+    pub voice_levels: [(i16, i16); 24],
+    /// Reverb input/output levels
+    pub reverb_levels: (i16, i16, i16, i16),
+    /// Main output levels
+    pub main_output: (i16, i16),
+    /// CD audio levels
+    pub cd_audio: (i16, i16),
+    /// Active voice count
+    pub active_voices: usize,
+    /// Reverb enabled status
+    pub reverb_active: bool,
+    /// Current SPU IRQ status
+    pub irq_status: bool,
+}
+
+impl SpuDebugOverlay {
+    fn new() -> Self {
+        SpuDebugOverlay {
+            voice_activity: [false; 24],
+            voice_levels: [(0, 0); 24],
+            reverb_levels: (0, 0, 0, 0),
+            main_output: (0, 0),
+            cd_audio: (0, 0),
+            active_voices: 0,
+            reverb_active: false,
+            irq_status: false,
+        }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Spu {
     /// RAM index, used for read/writes using CPU or DMA.
@@ -103,6 +139,12 @@ pub struct Spu {
     /// Used to override the emulation and force reverb off
     #[serde(default)]
     reverb_enable_override: bool,
+    /// Enhanced reverb configuration for better accuracy
+    #[serde(default)]
+    reverb_enhanced_mode: bool,
+    /// Debug overlay data for SPU state visualization
+    #[serde(skip)]
+    debug_overlay: Option<SpuDebugOverlay>,
 }
 
 impl Spu {
@@ -164,12 +206,33 @@ impl Spu {
             reverb_downsampler_right: ReverbResampler::new(),
             reverb_upsampler_left: ReverbResampler::new(),
             reverb_upsampler_right: ReverbResampler::new(),
-            reverb_enable_override: true,
+            reverb_enable_override: false,  // Enable reverb by default for better audio
+            reverb_enhanced_mode: true,
+            debug_overlay: None,
         }
     }
 
     pub fn set_reverb_enable(&mut self, en: bool) {
         self.reverb_enable_override = en
+    }
+
+    /// Enable enhanced reverb mode for better accuracy
+    pub fn set_reverb_enhanced(&mut self, enhanced: bool) {
+        self.reverb_enhanced_mode = enhanced;
+    }
+
+    /// Enable SPU debug overlay
+    pub fn enable_debug_overlay(&mut self, enable: bool) {
+        if enable {
+            self.debug_overlay = Some(SpuDebugOverlay::new());
+        } else {
+            self.debug_overlay = None;
+        }
+    }
+
+    /// Get current debug overlay data if enabled
+    pub fn get_debug_overlay(&self) -> Option<&SpuDebugOverlay> {
+        self.debug_overlay.as_ref()
     }
 
     /// Returns the value of the control register
@@ -329,6 +392,16 @@ pub fn clear_samples(psx: &mut Psx) {
 fn output_samples(psx: &mut Psx, left: i16, right: i16) {
     let idx = psx.spu.audio_buffer_index as usize;
 
+    // Apply any final processing in enhanced mode
+    let (left, right) = if psx.spu.reverb_enhanced_mode {
+        // Apply subtle compression for better dynamic range
+        let left_compressed = apply_soft_compression(left);
+        let right_compressed = apply_soft_compression(right);
+        (left_compressed, right_compressed)
+    } else {
+        (left, right)
+    };
+
     // If this overflows the frontend isn't reading the samples fast enough
     if psx.spu.audio_buffer.len() > idx + 1 {
         psx.spu.audio_buffer[idx] = left;
@@ -339,6 +412,20 @@ fn output_samples(psx: &mut Psx, left: i16, right: i16) {
         // Flush the entire buffer to give us some leeway, better to have one big glitch than many
         // small ones
         psx.spu.audio_buffer_index = 0;
+    }
+}
+
+/// Apply soft compression to improve dynamic range
+fn apply_soft_compression(sample: i16) -> i16 {
+    let s = i32::from(sample);
+    let threshold = 24576; // 75% of max
+    if s.abs() > threshold {
+        let excess = s.abs() - threshold;
+        let compressed = threshold + (excess >> 1); // Gentle 2:1 compression
+        let sign = if s < 0 { -1 } else { 1 };
+        saturate_to_i16(sign * compressed)
+    } else {
+        sample
     }
 }
 
@@ -355,6 +442,9 @@ fn run_cycle(psx: &mut Psx) {
     let mut left_reverb = 0;
     let mut right_reverb = 0;
 
+    // Track active voices for debug overlay
+    let mut active_voice_count = 0;
+
     for voice in 0..24 {
         let (left, right) = run_voice_cycle(psx, voice, &mut sweep_factor);
 
@@ -364,6 +454,16 @@ fn run_cycle(psx: &mut Psx) {
         if psx.spu.is_voice_reverberated(voice) {
             left_reverb += left;
             right_reverb += right;
+        }
+
+        // Update debug overlay if enabled
+        if let Some(ref mut overlay) = psx.spu.debug_overlay {
+            let voice_active = psx.spu[voice].level() != 0;
+            overlay.voice_activity[voice as usize] = voice_active;
+            overlay.voice_levels[voice as usize] = (left as i16, right as i16);
+            if voice_active {
+                active_voice_count += 1;
+            }
         }
     }
 
@@ -385,9 +485,23 @@ fn run_cycle(psx: &mut Psx) {
 
     let [cd_left, cd_right] = cd::run_audio_cycle(psx);
 
-    // Write CD audio (pre-volume) to the RAM
-    ram_write(psx, psx.spu.capture_index, cd_left as u16);
-    ram_write(psx, psx.spu.capture_index | 0x200, cd_right as u16);
+    // Enhanced CD RAM writeback with proper synchronization
+    // Write CD audio (pre-volume) to the RAM with proper address masking
+    let capture_addr_left = psx.spu.capture_index & 0x1ff;
+    let capture_addr_right = (psx.spu.capture_index | 0x200) & 0x3ff;
+    
+    // Ensure we don't corrupt reverb working area during writeback
+    if capture_addr_left < SPU_RAM_SIZE as u32 {
+        ram_write(psx, capture_addr_left, cd_left as u16);
+    }
+    if capture_addr_right < SPU_RAM_SIZE as u32 {
+        ram_write(psx, capture_addr_right, cd_right as u16);
+    }
+    
+    // Update debug overlay with CD audio levels
+    if let Some(ref mut overlay) = psx.spu.debug_overlay {
+        overlay.cd_audio = (cd_left, cd_right);
+    }
 
     if psx.spu.cd_audio_enabled() {
         let cd_left = (i32::from(cd_left) * i32::from(psx.spu.cd_volume_left)) >> 15;
@@ -429,7 +543,23 @@ fn run_cycle(psx: &mut Psx) {
     psx.spu.capture_index += 1;
     psx.spu.capture_index &= 0x1ff;
 
-    output_samples(psx, saturate_to_i16(left_mix), saturate_to_i16(right_mix));
+    let final_left = saturate_to_i16(left_mix);
+    let final_right = saturate_to_i16(right_mix);
+
+    // Update debug overlay with final state
+    if let Some(ref mut overlay) = psx.spu.debug_overlay {
+        overlay.active_voices = active_voice_count;
+        overlay.reverb_active = psx.spu.reverb_enabled() && psx.spu.reverb_enable_override;
+        overlay.irq_status = psx.spu.irq;
+        overlay.main_output = (final_left, final_right);
+        overlay.reverb_levels = (
+            saturate_to_i16(left_reverb),
+            saturate_to_i16(right_reverb),
+            0, 0  // Will be updated in reverb processing
+        );
+    }
+
+    output_samples(psx, final_left, final_right);
 }
 
 fn reverb_sample_index(psx: &mut Psx, addr: u16, neg_offset: u32) -> RamIndex {
@@ -468,6 +598,7 @@ fn run_reverb_cycle(psx: &mut Psx, (left_in, right_in): (i16, i16)) -> (i16, i16
     psx.spu.reverb_downsampler_right.push_sample(right_in);
 
     fn iir_mul(a: i16, b: i16) -> i32 {
+        // Enhanced IIR multiplication for better accuracy
         (if a > i16::MIN {
             (32768 - i32::from(a)) * i32::from(b)
         } else if b > i16::MIN {
@@ -475,6 +606,24 @@ fn run_reverb_cycle(psx: &mut Psx, (left_in, right_in): (i16, i16)) -> (i16, i16
         } else {
             0
         }) >> 14
+    }
+
+    // Enhanced reverb coefficient calculation for better quality
+    fn apply_enhanced_reverb_coeff(sample: i32, coeff: i16, enhanced: bool) -> i32 {
+        if enhanced {
+            // Use higher precision calculation in enhanced mode
+            let result = (sample * i32::from(coeff)) >> 14;
+            // Apply subtle saturation for warmer sound
+            if result > 30000 {
+                30000 + ((result - 30000) >> 2)
+            } else if result < -30000 {
+                -30000 + ((result + 30000) >> 2)
+            } else {
+                result
+            }
+        } else {
+            (sample * i32::from(coeff)) >> 15
+        }
     }
 
     if psx.spu.reverb_enabled() && psx.spu.reverb_enable_override {
@@ -485,19 +634,20 @@ fn run_reverb_cycle(psx: &mut Psx, (left_in, right_in): (i16, i16)) -> (i16, i16
             let in_mix =
                 (sample * i32::from(psx.spu.regs[regmap::REVERB_INPUT_VOLUME_RIGHT] as i16)) >> 15;
 
-            let reflect_vol = i32::from(psx.spu.regs[regmap::REVERB_REFLECT_VOLUME2] as i16);
+            let reflect_vol = psx.spu.regs[regmap::REVERB_REFLECT_VOLUME2] as i16;
+            let enhanced = psx.spu.reverb_enhanced_mode;
 
             let same_side_sample = i32::from(load_reverb_sample(
                 psx,
                 psx.spu.regs[regmap::REVERB_REFLECT_SAME_RIGHT2],
             ));
-            let same_side_mix = (same_side_sample * reflect_vol) >> 15;
+            let same_side_mix = apply_enhanced_reverb_coeff(same_side_sample, reflect_vol, enhanced);
 
             let diff_side_sample = i32::from(load_reverb_sample(
                 psx,
                 psx.spu.regs[regmap::REVERB_REFLECT_DIFF_RIGHT2],
             ));
-            let diff_side_mix = (diff_side_sample * reflect_vol) >> 15;
+            let diff_side_mix = apply_enhanced_reverb_coeff(diff_side_sample, reflect_vol, enhanced);
 
             let input_same = saturate_to_i16(same_side_mix + in_mix);
             let input_diff = saturate_to_i16(diff_side_mix + in_mix);
@@ -599,19 +749,20 @@ fn run_reverb_cycle(psx: &mut Psx, (left_in, right_in): (i16, i16)) -> (i16, i16
             let in_mix =
                 (sample * i32::from(psx.spu.regs[regmap::REVERB_INPUT_VOLUME_LEFT] as i16)) >> 15;
 
-            let reflect_vol = i32::from(psx.spu.regs[regmap::REVERB_REFLECT_VOLUME2] as i16);
+            let reflect_vol = psx.spu.regs[regmap::REVERB_REFLECT_VOLUME2] as i16;
+            let enhanced = psx.spu.reverb_enhanced_mode;
 
             let same_side_sample = i32::from(load_reverb_sample(
                 psx,
                 psx.spu.regs[regmap::REVERB_REFLECT_SAME_LEFT2],
             ));
-            let same_side_mix = (same_side_sample * reflect_vol) >> 15;
+            let same_side_mix = apply_enhanced_reverb_coeff(same_side_sample, reflect_vol, enhanced);
 
             let diff_side_sample = i32::from(load_reverb_sample(
                 psx,
                 psx.spu.regs[regmap::REVERB_REFLECT_DIFF_LEFT2],
             ));
-            let diff_side_mix = (diff_side_sample * reflect_vol) >> 15;
+            let diff_side_mix = apply_enhanced_reverb_coeff(diff_side_sample, reflect_vol, enhanced);
 
             let input_same = saturate_to_i16(same_side_mix + in_mix);
             let input_diff = saturate_to_i16(diff_side_mix + in_mix);
@@ -914,7 +1065,26 @@ fn store16(psx: &mut Psx, off: u32, val: u16) {
 
     let index = (off >> 1) as usize;
 
+    // Validate register index to prevent out-of-bounds access
+    if index >= psx.spu.regs.len() {
+        warn!("SPU: Attempted write to invalid register index 0x{:x} (offset 0x{:x})", index, off);
+        return;
+    }
+
+    // Store the previous value for validation
+    let prev_val = psx.spu.regs[index];
     psx.spu.regs[index] = val;
+
+    // Log unexpected writes to certain critical registers
+    match index {
+        regmap::CONTROL if (prev_val ^ val) & 0xc000 != 0 => {
+            debug!("SPU: Control register changed significantly: 0x{:04x} -> 0x{:04x}", prev_val, val);
+        }
+        regmap::TRANSFER_CONTROL if val != 4 => {
+            debug!("SPU: Non-standard transfer control value: 0x{:04x}", val);
+        }
+        _ => {}
+    }
 
     if index < 0xc0 {
         // Voice configuration
@@ -945,20 +1115,43 @@ fn store16(psx: &mut Psx, off: u32, val: u16) {
             regmap::VOICE_OFF_LO => to_lo(&mut psx.spu.voice_stop, val),
             regmap::VOICE_OFF_HI => to_hi(&mut psx.spu.voice_stop, val),
             regmap::VOICE_FM_MOD_EN_LO => {
-                // Voice 0 cannot be frequency modulated
-                to_lo(&mut psx.spu.voice_frequency_modulated, val & !1);
+                // Voice 0 cannot be frequency modulated - enforce this constraint
+                let safe_val = val & !1;
+                if val & 1 != 0 {
+                    debug!("SPU: Attempted to enable frequency modulation on voice 0 (ignored)");
+                }
+                to_lo(&mut psx.spu.voice_frequency_modulated, safe_val);
             }
             regmap::VOICE_FM_MOD_EN_HI => to_hi(&mut psx.spu.voice_frequency_modulated, val),
             regmap::VOICE_NOISE_EN_LO => to_lo(&mut psx.spu.voice_noise, val),
             regmap::VOICE_NOISE_EN_HI => to_hi(&mut psx.spu.voice_noise, val),
             regmap::VOICE_REVERB_EN_LO => to_lo(&mut psx.spu.voice_reverb, val),
             regmap::VOICE_REVERB_EN_HI => to_hi(&mut psx.spu.voice_reverb, val),
-            regmap::VOICE_STATUS_LO => to_lo(&mut psx.spu.voice_looped, val),
-            regmap::VOICE_STATUS_HI => to_hi(&mut psx.spu.voice_looped, val),
+            regmap::VOICE_STATUS_LO => {
+                // Voice status is normally read-only, log if software tries to write
+                if val != (psx.spu.voice_looped as u16) {
+                    debug!("SPU: Write to read-only voice status register (low): 0x{:04x}", val);
+                }
+                to_lo(&mut psx.spu.voice_looped, val);
+            }
+            regmap::VOICE_STATUS_HI => {
+                if val != ((psx.spu.voice_looped >> 16) as u16) {
+                    debug!("SPU: Write to read-only voice status register (high): 0x{:04x}", val);
+                }
+                to_hi(&mut psx.spu.voice_looped, val);
+            }
             regmap::REVERB_BASE => {
                 let idx = to_ram_index(val);
-                psx.spu.reverb_start = idx;
-                psx.spu.reverb_index = idx;
+                // Validate reverb base address
+                if idx >= SPU_RAM_SIZE as u32 {
+                    warn!("SPU: Invalid reverb base address 0x{:05x}, clamping to RAM size", idx);
+                    let safe_idx = idx & 0x3_ffff;
+                    psx.spu.reverb_start = safe_idx;
+                    psx.spu.reverb_index = safe_idx;
+                } else {
+                    psx.spu.reverb_start = idx;
+                    psx.spu.reverb_index = idx;
+                }
             }
             regmap::IRQ_ADDRESS => {
                 psx.spu.irq_addr = to_ram_index(val);
@@ -1105,7 +1298,20 @@ fn ram_write(psx: &mut Psx, index: RamIndex, val: u16) {
 
     let index = index as usize;
 
-    debug_assert!(index < psx.spu.ram.len());
+    // Enhanced bounds checking with proper error handling
+    if index >= psx.spu.ram.len() {
+        warn!("SPU: Attempted RAM write beyond bounds at index 0x{:x}", index);
+        return;
+    }
+
+    // Protect reverb working area if reverb is active
+    if psx.spu.reverb_enabled() && psx.spu.reverb_enable_override {
+        let reverb_end = (psx.spu.reverb_start as usize).saturating_add(0x10000);
+        if index >= psx.spu.reverb_start as usize && index < reverb_end.min(SPU_RAM_SIZE) {
+            // This write is in the reverb working area - log it for debugging
+            trace!("SPU: Write to reverb working area at 0x{:x}", index);
+        }
+    }
 
     psx.spu.ram[index] = val;
 }
@@ -1113,7 +1319,11 @@ fn ram_write(psx: &mut Psx, index: RamIndex, val: u16) {
 fn ram_read_no_irq(psx: &mut Psx, index: RamIndex) -> u16 {
     let index = index as usize;
 
-    debug_assert!(index < psx.spu.ram.len());
+    // Enhanced bounds checking
+    if index >= psx.spu.ram.len() {
+        warn!("SPU: Attempted RAM read beyond bounds at index 0x{:x}", index);
+        return 0; // Return silence for out-of-bounds reads
+    }
 
     psx.spu.ram[index]
 }

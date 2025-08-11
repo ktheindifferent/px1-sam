@@ -26,6 +26,7 @@ mod xmem;
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
+pub use spu::SpuDebugOverlay;
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -223,6 +224,26 @@ impl Psx {
     /// 0 = 1x (native), 1 = 2x, 2 = 4x, etc.
     pub fn set_upscale_shift(&mut self, shift: u8) {
         self.gpu.set_upscale_shift(shift);
+    }
+
+    /// Enable or disable SPU reverb
+    pub fn set_spu_reverb_enable(&mut self, enable: bool) {
+        self.spu.set_reverb_enable(enable);
+    }
+
+    /// Enable or disable enhanced SPU reverb mode for better audio quality
+    pub fn set_spu_reverb_enhanced(&mut self, enhanced: bool) {
+        self.spu.set_reverb_enhanced(enhanced);
+    }
+
+    /// Enable or disable SPU debug overlay
+    pub fn enable_spu_debug_overlay(&mut self, enable: bool) {
+        self.spu.enable_debug_overlay(enable);
+    }
+
+    /// Get SPU debug overlay data if enabled
+    pub fn get_spu_debug_overlay(&self) -> Option<&spu::SpuDebugOverlay> {
+        self.spu.get_debug_overlay()
     }
 
     /// Advance the CPU cycle counter by the given number of ticks
