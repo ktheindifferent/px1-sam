@@ -10,14 +10,264 @@ use super::{cd, cpu, irq, sync, AccessWidth, Addressable, CycleCount, Psx};
 use fifo::DecoderFifo;
 use reverb_resampler::ReverbResampler;
 use std::ops::{Index, IndexMut};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use log::warn;
 
 const SPUSYNC: sync::SyncToken = sync::SyncToken::Spu;
 
 /// Offset into the SPU internal ram
 type RamIndex = u32;
 
+/// Default audio ring buffer for serialization
+fn default_audio_ring_buffer() -> AudioRingBuffer {
+    AudioRingBuffer::new(AudioBufferConfig::default().buffer_size)
+}
+
+/// Safe ring buffer for audio samples with overflow protection
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct AudioRingBuffer {
+    /// The actual buffer storing audio samples
+    buffer: Vec<i16>,
+    /// Write position (producer)
+    write_pos: usize,
+    /// Read position (consumer)
+    read_pos: usize,
+    /// Total samples written (for statistics)
+    total_written: u64,
+    /// Total samples dropped due to overflow
+    total_dropped: u64,
+    /// Maximum fill level reached
+    max_fill_level: usize,
+    /// Current fill level
+    current_fill: usize,
+    /// Buffer size (must be power of 2 for efficient modulo)
+    size: usize,
+    /// Size mask for efficient modulo operations
+    size_mask: usize,
+    /// Overflow recovery mode
+    recovery_mode: AudioRecoveryMode,
+    /// Samples dropped in current overflow event
+    current_drop_count: u32,
+    /// Target latency in samples
+    target_latency: usize,
+    /// Latency monitoring
+    latency_samples: Vec<u32>,
+    latency_index: usize,
+}
+
+/// Audio recovery modes when buffer overflows
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum AudioRecoveryMode {
+    /// Drop oldest samples (default)
+    DropOldest,
+    /// Drop newest samples
+    DropNewest,
+    /// Halve the buffer (aggressive recovery)
+    HalveBuffer,
+    /// Reset buffer completely
+    Reset,
+}
+
+impl AudioRingBuffer {
+    /// Create a new ring buffer with specified size (will be rounded to power of 2)
+    pub fn new(requested_size: usize) -> Self {
+        let size = requested_size.next_power_of_two();
+        let size_mask = size - 1;
+        
+        AudioRingBuffer {
+            buffer: vec![0; size],
+            write_pos: 0,
+            read_pos: 0,
+            total_written: 0,
+            total_dropped: 0,
+            max_fill_level: 0,
+            current_fill: 0,
+            size,
+            size_mask,
+            recovery_mode: AudioRecoveryMode::DropOldest,
+            current_drop_count: 0,
+            target_latency: size / 4, // Default to 25% of buffer
+            latency_samples: vec![0; 128],
+            latency_index: 0,
+        }
+    }
+
+    /// Get available space in the buffer
+    #[inline]
+    pub fn available_space(&self) -> usize {
+        self.size - self.current_fill
+    }
+
+    /// Check if buffer is full
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.current_fill >= self.size - 2
+    }
+
+    /// Get current fill percentage
+    #[inline]
+    pub fn fill_percentage(&self) -> f32 {
+        (self.current_fill as f32 / self.size as f32) * 100.0
+    }
+
+    /// Push a stereo sample pair with overflow protection
+    pub fn push_stereo(&mut self, left: i16, right: i16) -> bool {
+        if self.available_space() < 2 {
+            self.handle_overflow(2);
+            return false;
+        }
+
+        self.buffer[self.write_pos] = left;
+        self.write_pos = (self.write_pos + 1) & self.size_mask;
+        self.buffer[self.write_pos] = right;
+        self.write_pos = (self.write_pos + 1) & self.size_mask;
+        
+        self.current_fill += 2;
+        self.total_written += 2;
+        self.max_fill_level = self.max_fill_level.max(self.current_fill);
+        
+        self.update_latency_monitoring();
+        true
+    }
+
+    /// Handle buffer overflow based on recovery mode
+    fn handle_overflow(&mut self, needed_samples: usize) {
+        match self.recovery_mode {
+            AudioRecoveryMode::DropOldest => {
+                let to_drop = needed_samples.min(self.current_fill);
+                self.read_pos = (self.read_pos + to_drop) & self.size_mask;
+                self.current_fill = self.current_fill.saturating_sub(to_drop);
+                self.total_dropped += to_drop as u64;
+                self.current_drop_count += to_drop as u32;
+            }
+            AudioRecoveryMode::DropNewest => {
+                self.total_dropped += needed_samples as u64;
+                self.current_drop_count += needed_samples as u32;
+            }
+            AudioRecoveryMode::HalveBuffer => {
+                let to_drop = self.current_fill / 2;
+                self.read_pos = (self.read_pos + to_drop) & self.size_mask;
+                self.current_fill = self.current_fill.saturating_sub(to_drop);
+                self.total_dropped += to_drop as u64;
+                self.current_drop_count += to_drop as u32;
+            }
+            AudioRecoveryMode::Reset => {
+                self.total_dropped += self.current_fill as u64;
+                self.current_drop_count += self.current_fill as u32;
+                self.read_pos = 0;
+                self.write_pos = 0;
+                self.current_fill = 0;
+            }
+        }
+    }
+
+    /// Pop stereo samples from the buffer
+    pub fn pop_stereo(&mut self, count: usize) -> Vec<i16> {
+        let available = (self.current_fill / 2).min(count) * 2;
+        let mut samples = Vec::with_capacity(available);
+        
+        for _ in 0..available {
+            samples.push(self.buffer[self.read_pos]);
+            self.read_pos = (self.read_pos + 1) & self.size_mask;
+        }
+        
+        self.current_fill -= available;
+        
+        if self.current_drop_count > 0 && self.current_fill < self.target_latency {
+            self.current_drop_count = 0;
+        }
+        
+        samples
+    }
+
+    /// Update latency monitoring
+    fn update_latency_monitoring(&mut self) {
+        self.latency_samples[self.latency_index] = self.current_fill as u32;
+        self.latency_index = (self.latency_index + 1) % self.latency_samples.len();
+    }
+
+    /// Get average latency over monitoring window
+    pub fn get_average_latency(&self) -> f32 {
+        let sum: u32 = self.latency_samples.iter().sum();
+        sum as f32 / self.latency_samples.len() as f32
+    }
+
+    /// Set target latency
+    pub fn set_target_latency(&mut self, samples: usize) {
+        self.target_latency = samples.min(self.size / 2);
+    }
+
+    /// Set recovery mode
+    pub fn set_recovery_mode(&mut self, mode: AudioRecoveryMode) {
+        self.recovery_mode = mode;
+    }
+
+    /// Get buffer statistics
+    pub fn get_stats(&self) -> AudioBufferStats {
+        AudioBufferStats {
+            total_written: self.total_written,
+            total_dropped: self.total_dropped,
+            current_fill: self.current_fill,
+            max_fill_level: self.max_fill_level,
+            buffer_size: self.size,
+            drop_rate: if self.total_written > 0 {
+                (self.total_dropped as f32 / self.total_written as f32) * 100.0
+            } else {
+                0.0
+            },
+            average_latency: self.get_average_latency(),
+            is_dropping: self.current_drop_count > 0,
+        }
+    }
+
+    /// Reset statistics
+    pub fn reset_stats(&mut self) {
+        self.total_written = 0;
+        self.total_dropped = 0;
+        self.max_fill_level = self.current_fill;
+        self.current_drop_count = 0;
+    }
+}
+
+/// Audio buffer statistics for monitoring
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioBufferStats {
+    pub total_written: u64,
+    pub total_dropped: u64,
+    pub current_fill: usize,
+    pub max_fill_level: usize,
+    pub buffer_size: usize,
+    pub drop_rate: f32,
+    pub average_latency: f32,
+    pub is_dropping: bool,
+}
+
+/// Audio buffer configuration
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioBufferConfig {
+    /// Buffer size in samples (will be rounded to power of 2)
+    pub buffer_size: usize,
+    /// Target latency in samples
+    pub target_latency: usize,
+    /// Recovery mode for overflow
+    pub recovery_mode: AudioRecoveryMode,
+    /// Enable debug overlay
+    pub enable_debug: bool,
+}
+
+impl Default for AudioBufferConfig {
+    fn default() -> Self {
+        AudioBufferConfig {
+            buffer_size: 8192,  // Larger default buffer for safety
+            target_latency: 2048,  // ~46ms at 44.1kHz
+            recovery_mode: AudioRecoveryMode::DropOldest,
+            enable_debug: false,
+        }
+    }
+}
+
 /// Debug overlay for visualizing SPU state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SpuDebugOverlay {
     /// Voice activity status
     pub voice_activity: [bool; 24],
@@ -35,6 +285,19 @@ pub struct SpuDebugOverlay {
     pub reverb_active: bool,
     /// Current SPU IRQ status
     pub irq_status: bool,
+    /// Audio buffer statistics
+    pub buffer_stats: AudioBufferStats,
+    /// Buffer health status
+    pub buffer_health: BufferHealth,
+}
+
+/// Buffer health status for quick visual feedback
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum BufferHealth {
+    Good,      // < 50% full
+    Warning,   // 50-75% full
+    Critical,  // 75-90% full
+    Overflow,  // > 90% full or dropping samples
 }
 
 impl SpuDebugOverlay {
@@ -48,7 +311,35 @@ impl SpuDebugOverlay {
             active_voices: 0,
             reverb_active: false,
             irq_status: false,
+            buffer_stats: AudioBufferStats {
+                total_written: 0,
+                total_dropped: 0,
+                current_fill: 0,
+                max_fill_level: 0,
+                buffer_size: 8192,
+                drop_rate: 0.0,
+                average_latency: 0.0,
+                is_dropping: false,
+            },
+            buffer_health: BufferHealth::Good,
         }
+    }
+    
+    /// Update buffer health status based on stats
+    pub fn update_buffer_health(&mut self, stats: &AudioBufferStats) {
+        self.buffer_stats = stats.clone();
+        
+        let fill_percentage = (stats.current_fill as f32 / stats.buffer_size as f32) * 100.0;
+        
+        self.buffer_health = if stats.is_dropping || fill_percentage > 90.0 {
+            BufferHealth::Overflow
+        } else if fill_percentage > 75.0 {
+            BufferHealth::Critical
+        } else if fill_percentage > 50.0 {
+            BufferHealth::Warning
+        } else {
+            BufferHealth::Good
+        };
     }
 }
 
@@ -90,13 +381,12 @@ pub struct Spu {
     /// SPU internal RAM, 16bit wide
     #[serde(with = "serde_big_array::BigArray")]
     ram: [u16; SPU_RAM_SIZE],
-    /// Output audio buffer. Sent to the frontend after each frame, so should be large enough to
-    /// store one frame worth of audio samples. Assuming a 50Hz refresh rate @ 44.1kHz that should
-    /// be about ~1800 samples per frame at most.
-    #[serde(with = "serde_big_array::BigArray")]
-    audio_buffer: [i16; 2048],
-    /// Write pointer into the audio_buffer
-    audio_buffer_index: u32,
+    /// Safe ring buffer for audio output with overflow protection
+    #[serde(default = "default_audio_ring_buffer")]
+    audio_ring_buffer: AudioRingBuffer,
+    /// Audio buffer configuration
+    #[serde(default)]
+    audio_buffer_config: AudioBufferConfig,
     /// Mix volume for the samples coming from the CD, left
     #[serde(default)]
     cd_volume_left: i16,
@@ -190,8 +480,8 @@ impl Spu {
             voice_looped: 0,
             regs: [0; 320],
             ram: [0; SPU_RAM_SIZE],
-            audio_buffer: [0; 2048],
-            audio_buffer_index: 0,
+            audio_ring_buffer: AudioRingBuffer::new(AudioBufferConfig::default().buffer_size),
+            audio_buffer_config: AudioBufferConfig::default(),
             cd_volume_left: 0,
             cd_volume_right: 0,
             noise_counter1: 0,
@@ -377,21 +667,95 @@ pub fn run(psx: &mut Psx) {
 }
 
 /// Get the contents of the sample buffer
-pub fn get_samples(psx: &mut Psx) -> &[i16] {
-    let end = psx.spu.audio_buffer_index as usize;
-
-    &psx.spu.audio_buffer[..end]
+pub fn get_samples(psx: &mut Psx) -> Vec<i16> {
+    // Pop all available samples from the ring buffer
+    let available = psx.spu.audio_ring_buffer.current_fill / 2;
+    psx.spu.audio_ring_buffer.pop_stereo(available)
 }
 
 /// Clear the sample buffer
 pub fn clear_samples(psx: &mut Psx) {
-    psx.spu.audio_buffer_index = 0;
+    // Reset the ring buffer statistics
+    psx.spu.audio_ring_buffer.reset_stats();
 }
 
-/// Put the provided stereo pair in the output buffer and flush it if necessary
-fn output_samples(psx: &mut Psx, left: i16, right: i16) {
-    let idx = psx.spu.audio_buffer_index as usize;
+/// Configure audio buffer settings
+pub fn configure_audio_buffer(psx: &mut Psx, config: AudioBufferConfig) {
+    // Store the configuration
+    psx.spu.audio_buffer_config = config.clone();
+    
+    // Create a new ring buffer with the specified size
+    psx.spu.audio_ring_buffer = AudioRingBuffer::new(config.buffer_size);
+    
+    // Set target latency
+    psx.spu.audio_ring_buffer.set_target_latency(config.target_latency);
+    
+    // Set recovery mode
+    psx.spu.audio_ring_buffer.set_recovery_mode(config.recovery_mode);
+    
+    // Enable/disable debug overlay
+    if config.enable_debug {
+        if psx.spu.debug_overlay.is_none() {
+            psx.spu.debug_overlay = Some(SpuDebugOverlay::new());
+        }
+    } else {
+        psx.spu.debug_overlay = None;
+    }
+}
 
+/// Get current audio buffer statistics
+pub fn get_audio_buffer_stats(psx: &Psx) -> AudioBufferStats {
+    psx.spu.audio_ring_buffer.get_stats()
+}
+
+/// Set audio buffer recovery mode
+pub fn set_audio_recovery_mode(psx: &mut Psx, mode: AudioRecoveryMode) {
+    psx.spu.audio_ring_buffer.set_recovery_mode(mode);
+    psx.spu.audio_buffer_config.recovery_mode = mode;
+}
+
+/// Set target latency in samples
+pub fn set_target_latency(psx: &mut Psx, samples: usize) {
+    psx.spu.audio_ring_buffer.set_target_latency(samples);
+    psx.spu.audio_buffer_config.target_latency = samples;
+}
+
+/// Get debug overlay data
+pub fn get_debug_overlay(psx: &Psx) -> Option<&SpuDebugOverlay> {
+    psx.spu.debug_overlay.as_ref()
+}
+
+/// Update debug overlay with current state
+pub fn update_debug_overlay(psx: &mut Psx) {
+    if let Some(ref mut overlay) = psx.spu.debug_overlay {
+        // Update buffer stats
+        let stats = psx.spu.audio_ring_buffer.get_stats();
+        overlay.update_buffer_health(&stats);
+        
+        // Update voice activity
+        let mut active_count = 0;
+        for (i, voice) in psx.spu.voices.iter().enumerate() {
+            let is_active = voice.is_running();
+            overlay.voice_activity[i] = is_active;
+            if is_active {
+                active_count += 1;
+                overlay.voice_levels[i] = (voice.volume_left.get_level(), voice.volume_right.get_level());
+            } else {
+                overlay.voice_levels[i] = (0, 0);
+            }
+        }
+        overlay.active_voices = active_count;
+        
+        // Update other status
+        overlay.reverb_active = !psx.spu.reverb_enable_override;
+        overlay.irq_status = psx.spu.irq;
+        overlay.main_output = (psx.spu.main_volume_left.get_level(), psx.spu.main_volume_right.get_level());
+        overlay.cd_audio = (psx.spu.cd_volume_left, psx.spu.cd_volume_right);
+    }
+}
+
+/// Put the provided stereo pair in the output buffer with overflow protection
+fn output_samples(psx: &mut Psx, left: i16, right: i16) {
     // Apply any final processing in enhanced mode
     let (left, right) = if psx.spu.reverb_enhanced_mode {
         // Apply subtle compression for better dynamic range
@@ -402,16 +766,21 @@ fn output_samples(psx: &mut Psx, left: i16, right: i16) {
         (left, right)
     };
 
-    // If this overflows the frontend isn't reading the samples fast enough
-    if psx.spu.audio_buffer.len() > idx + 1 {
-        psx.spu.audio_buffer[idx] = left;
-        psx.spu.audio_buffer[idx + 1] = right;
-        psx.spu.audio_buffer_index += 2;
-    } else {
-        warn!("Frontend isn't reading our audio samples fast enough");
-        // Flush the entire buffer to give us some leeway, better to have one big glitch than many
-        // small ones
-        psx.spu.audio_buffer_index = 0;
+    // Push to ring buffer with automatic overflow handling
+    let success = psx.spu.audio_ring_buffer.push_stereo(left, right);
+    
+    if !success {
+        // Update debug overlay if enabled
+        if let Some(ref mut overlay) = psx.spu.debug_overlay {
+            let stats = psx.spu.audio_ring_buffer.get_stats();
+            overlay.update_buffer_health(&stats);
+        }
+        
+        // Log overflow event periodically (not every sample to avoid spam)
+        if psx.spu.audio_ring_buffer.total_dropped % 1000 == 0 {
+            warn!("Audio buffer overflow: {} samples dropped", 
+                  psx.spu.audio_ring_buffer.total_dropped);
+        }
     }
 }
 
@@ -1396,6 +1765,13 @@ impl Voice {
             start_delay: 0,
         }
     }
+    
+    /// Check if voice is currently running
+    pub fn is_running(&self) -> bool {
+        // A voice is considered running if it has a non-zero ADSR level
+        // or if it's still in start delay
+        self.adsr.level != 0 || self.start_delay > 0
+    }
 
     /// Perform a loop if it was requested by the previously decoded block. Returns `true` if a
     /// loop has taken place
@@ -1610,6 +1986,11 @@ impl Volume {
     }
 
     fn level(&self) -> i16 {
+        self.level
+    }
+    
+    /// Get the current volume level for debug overlay
+    pub fn get_level(&self) -> i16 {
         self.level
     }
 
@@ -2152,3 +2533,197 @@ const AUDIO_FREQ_HZ: CycleCount = 44_100;
 /// The CPU frequency is an exact multiple of the audio frequency, so the divider is always an
 /// integer (0x300 normally)
 const SPU_FREQ_DIVIDER: CycleCount = cpu::CPU_FREQ_HZ / AUDIO_FREQ_HZ;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ring_buffer_basic() {
+        let mut buffer = AudioRingBuffer::new(16);
+        
+        // Test basic push/pop
+        assert!(buffer.push_stereo(100, 200));
+        assert!(buffer.push_stereo(300, 400));
+        
+        let samples = buffer.pop_stereo(2);
+        assert_eq!(samples, vec![100, 200, 300, 400]);
+        assert_eq!(buffer.current_fill, 0);
+    }
+
+    #[test]
+    fn test_ring_buffer_overflow_drop_oldest() {
+        let mut buffer = AudioRingBuffer::new(8); // Small buffer for testing
+        buffer.set_recovery_mode(AudioRecoveryMode::DropOldest);
+        
+        // Fill buffer
+        for i in 0..4 {
+            assert!(buffer.push_stereo(i * 10, i * 10 + 1));
+        }
+        assert_eq!(buffer.current_fill, 8);
+        
+        // Overflow - should drop oldest
+        assert!(!buffer.push_stereo(100, 101)); // Should fail but handle gracefully
+        assert_eq!(buffer.total_dropped, 2);
+        
+        // Should have room now after dropping oldest
+        assert!(buffer.push_stereo(100, 101));
+    }
+
+    #[test]
+    fn test_ring_buffer_overflow_drop_newest() {
+        let mut buffer = AudioRingBuffer::new(8);
+        buffer.set_recovery_mode(AudioRecoveryMode::DropNewest);
+        
+        // Fill buffer
+        for i in 0..4 {
+            assert!(buffer.push_stereo(i * 10, i * 10 + 1));
+        }
+        
+        // Overflow - should drop newest (not add them)
+        assert!(!buffer.push_stereo(100, 101));
+        assert_eq!(buffer.total_dropped, 2);
+        
+        // Buffer should still contain original samples
+        let samples = buffer.pop_stereo(4);
+        assert_eq!(samples[0], 0);
+        assert_eq!(samples[1], 1);
+    }
+
+    #[test]
+    fn test_ring_buffer_overflow_halve() {
+        let mut buffer = AudioRingBuffer::new(8);
+        buffer.set_recovery_mode(AudioRecoveryMode::HalveBuffer);
+        
+        // Fill buffer
+        for i in 0..4 {
+            assert!(buffer.push_stereo(i * 10, i * 10 + 1));
+        }
+        
+        // Overflow - should halve the buffer
+        assert!(!buffer.push_stereo(100, 101));
+        assert_eq!(buffer.current_fill, 4); // Half of 8
+        assert_eq!(buffer.total_dropped, 4);
+    }
+
+    #[test]
+    fn test_ring_buffer_overflow_reset() {
+        let mut buffer = AudioRingBuffer::new(8);
+        buffer.set_recovery_mode(AudioRecoveryMode::Reset);
+        
+        // Fill buffer
+        for i in 0..4 {
+            assert!(buffer.push_stereo(i * 10, i * 10 + 1));
+        }
+        
+        // Overflow - should reset entire buffer
+        assert!(!buffer.push_stereo(100, 101));
+        assert_eq!(buffer.current_fill, 0);
+        assert_eq!(buffer.total_dropped, 8);
+        
+        // Should be able to add now
+        assert!(buffer.push_stereo(200, 201));
+        assert_eq!(buffer.current_fill, 2);
+    }
+
+    #[test]
+    fn test_latency_monitoring() {
+        let mut buffer = AudioRingBuffer::new(64);
+        buffer.set_target_latency(16);
+        
+        // Add samples
+        for _ in 0..8 {
+            buffer.push_stereo(0, 0);
+        }
+        
+        // Check average latency
+        let avg = buffer.get_average_latency();
+        assert!(avg > 0.0);
+        
+        // Fill percentage
+        let fill_pct = buffer.fill_percentage();
+        assert_eq!(fill_pct, 25.0); // 16/64 = 25%
+    }
+
+    #[test]
+    fn test_buffer_stats() {
+        let mut buffer = AudioRingBuffer::new(32);
+        
+        // Add some samples
+        for _ in 0..5 {
+            buffer.push_stereo(0, 0);
+        }
+        
+        let stats = buffer.get_stats();
+        assert_eq!(stats.total_written, 10);
+        assert_eq!(stats.current_fill, 10);
+        assert_eq!(stats.buffer_size, 32);
+        assert_eq!(stats.drop_rate, 0.0);
+        assert!(!stats.is_dropping);
+        
+        // Reset stats
+        buffer.reset_stats();
+        let stats = buffer.get_stats();
+        assert_eq!(stats.total_written, 0);
+        assert_eq!(stats.total_dropped, 0);
+    }
+
+    #[test]
+    fn test_power_of_two_rounding() {
+        let buffer = AudioRingBuffer::new(10);
+        assert_eq!(buffer.size, 16); // Should round to 16
+        
+        let buffer = AudioRingBuffer::new(32);
+        assert_eq!(buffer.size, 32); // Already power of 2
+        
+        let buffer = AudioRingBuffer::new(100);
+        assert_eq!(buffer.size, 128); // Should round to 128
+    }
+
+    #[test]
+    fn test_debug_overlay_update() {
+        let mut overlay = SpuDebugOverlay::new();
+        
+        let stats = AudioBufferStats {
+            total_written: 1000,
+            total_dropped: 10,
+            current_fill: 512,
+            max_fill_level: 600,
+            buffer_size: 1024,
+            drop_rate: 1.0,
+            average_latency: 512.0,
+            is_dropping: false,
+        };
+        
+        overlay.update_buffer_health(&stats);
+        assert_eq!(overlay.buffer_health, BufferHealth::Warning); // 50% full
+        
+        let stats = AudioBufferStats {
+            total_written: 1000,
+            total_dropped: 10,
+            current_fill: 800,
+            max_fill_level: 900,
+            buffer_size: 1024,
+            drop_rate: 1.0,
+            average_latency: 800.0,
+            is_dropping: false,
+        };
+        
+        overlay.update_buffer_health(&stats);
+        assert_eq!(overlay.buffer_health, BufferHealth::Critical); // 78% full
+        
+        let stats = AudioBufferStats {
+            total_written: 1000,
+            total_dropped: 10,
+            current_fill: 950,
+            max_fill_level: 1000,
+            buffer_size: 1024,
+            drop_rate: 1.0,
+            average_latency: 950.0,
+            is_dropping: true,
+        };
+        
+        overlay.update_buffer_health(&stats);
+        assert_eq!(overlay.buffer_health, BufferHealth::Overflow); // Dropping samples
+    }
+}
