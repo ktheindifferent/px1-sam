@@ -347,6 +347,34 @@ impl Rasterizer {
             RasterizerOption::Wireframe(v) => self.draw_wireframe = v,
             RasterizerOption::DrawPolygons(v) => self.draw_polygons = v,
             RasterizerOption::UpscaleShift(v) => self.set_upscale_shift(v),
+            RasterizerOption::RenderingMode(mode) => {
+                // Handle rendering mode changes
+                match mode {
+                    crate::psx::gpu::rendering_pipeline::RenderingMode::Enhanced => {
+                        self.draw_24bpp = true;
+                        self.dithering_force_disable = true;
+                    }
+                    crate::psx::gpu::rendering_pipeline::RenderingMode::Original => {
+                        self.draw_24bpp = false;
+                        self.dithering_force_disable = false;
+                    }
+                    crate::psx::gpu::rendering_pipeline::RenderingMode::Hybrid => {
+                        // Internal 24-bit, output 15-bit
+                        self.draw_24bpp = false;
+                        self.dithering_force_disable = false;
+                    }
+                }
+                self.rebuild_dither_table();
+            }
+            RasterizerOption::PerspectiveCorrection(_) => {
+                // Perspective correction is handled in the enhanced rasterizer
+            }
+            RasterizerOption::SubPixelPrecision(_) => {
+                // Sub-pixel precision is handled via fixed-point math
+            }
+            RasterizerOption::ColorBanding(_) => {
+                // Color banding is handled in the rendering pipeline
+            }
         }
     }
 
