@@ -323,6 +323,94 @@ export class PsxEmulator {
             throw takeFromExternrefTable0(ret[0]);
         }
     }
+    /**
+     * @returns {string}
+     */
+    debug_get_gpu_status() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.psxemulator_debug_get_gpu_status(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    debug_get_cpu_pc() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.psxemulator_debug_get_cpu_pc(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    debug_get_display_info() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.psxemulator_debug_get_display_info(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    test_render() {
+        const ret = wasm.psxemulator_test_render(this.__wbg_ptr);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    debug_test_render() {
+        const ret = wasm.psxemulator_debug_test_render(this.__wbg_ptr);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @param {number} steps
+     * @returns {string}
+     */
+    debug_step_cpu(steps) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.psxemulator_debug_step_cpu(this.__wbg_ptr, steps);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    debug_check_bios() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.psxemulator_debug_check_bios(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
 }
 
 async function __wbg_load(module, imports) {
