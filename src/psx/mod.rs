@@ -31,12 +31,15 @@ mod spu;
 mod sync;
 mod timers;
 mod xmem;
+pub mod zram;
+pub mod zram_config;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
 pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
 pub use spu::{SpuDebugOverlay, interpolation};
+pub use zram::{ZramSystem, GpuMemoryCompressor, CompressionStats};
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -92,6 +95,12 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// ZRAM memory compression system (not serialized)
+    #[serde(skip)]
+    zram_system: zram::ZramSystem,
+    /// GPU memory compressor (not serialized)
+    #[serde(skip)]
+    gpu_compressor: zram::GpuMemoryCompressor,
 }
 
 impl Psx {
@@ -146,6 +155,8 @@ impl Psx {
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            zram_system: zram::ZramSystem::new(4096, num_cpus::get()),
+            gpu_compressor: zram::GpuMemoryCompressor::new(),
         })
     }
 
@@ -335,6 +346,51 @@ impl Psx {
     /// Update developer overlay metrics
     fn update_developer_overlay(&mut self, elapsed_cycles: CycleCount) {
         self.developer_overlay.update(self, elapsed_cycles);
+    }
+
+    /// Compress memory block using ZRAM
+    pub fn compress_memory_block(&self, block_id: usize, data: &[u8], data_type: zram::DataType) -> f32 {
+        self.zram_system.store_compressed(block_id, data, data_type)
+    }
+
+    /// Decompress memory block from ZRAM
+    pub fn decompress_memory_block(&self, block_id: usize) -> Option<Vec<u8>> {
+        self.zram_system.retrieve_decompressed(block_id)
+    }
+
+    /// Prefetch memory blocks for reduced latency
+    pub fn prefetch_memory_blocks(&self, block_ids: &[usize]) {
+        self.zram_system.prefetch(block_ids)
+    }
+
+    /// Get ZRAM compression statistics
+    pub fn get_zram_stats(&self) -> zram::CompressionStats {
+        self.zram_system.get_stats()
+    }
+
+    /// Get ZRAM memory usage (compressed_size, original_size)
+    pub fn get_zram_memory_usage(&self) -> (usize, usize) {
+        self.zram_system.get_memory_usage()
+    }
+
+    /// Compress GPU texture
+    pub fn compress_gpu_texture(&self, texture_id: u64, data: &[u8]) -> f32 {
+        self.gpu_compressor.compress_texture(texture_id, data)
+    }
+
+    /// Decompress GPU texture
+    pub fn decompress_gpu_texture(&self, texture_id: u64) -> Option<Vec<u8>> {
+        self.gpu_compressor.decompress_texture(texture_id)
+    }
+
+    /// Compress GPU framebuffer
+    pub fn compress_gpu_framebuffer(&self, fb_id: usize, data: &[u8]) -> f32 {
+        self.gpu_compressor.compress_framebuffer(fb_id, data)
+    }
+
+    /// Clear ZRAM compression cache
+    pub fn clear_zram_cache(&self) {
+        self.zram_system.clear()
     }
 
     /// Advance the CPU cycle counter by the given number of ticks

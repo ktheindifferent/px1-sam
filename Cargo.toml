@@ -13,6 +13,8 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -46,6 +48,10 @@ spirv-reflect = { version = "0.2", optional = true }
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
 
+# Compression dependencies for ZRAM
+lz4_flex = "0.11"
+zstd = "0.13"
+
 [dependencies.web-sys]
 version = "0.3"
 features = [
@@ -67,11 +73,6 @@ features = [
   "Gamepad",
   "GamepadButton",
 ]
-
-[features]
-default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
-online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [profile.release]
 opt-level = "s"
