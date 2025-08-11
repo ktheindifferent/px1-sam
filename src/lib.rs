@@ -43,6 +43,7 @@ extern crate thiserror;
 mod assembler;
 mod bitwise;
 mod box_array;
+mod disc_control;
 mod error;
 mod memory_card;
 #[macro_use]
@@ -66,6 +67,7 @@ use psx::gpu::RasterizerOption;
 use psx::pad_memcard::devices::gamepad::{Button, ButtonState, DigitalPad, DualShock};
 use psx::pad_memcard::devices::{DeviceInterface, DisconnectedDevice};
 use psx::{CDC_ROM_SHA256, CDC_ROM_SIZE};
+use serde::{Serialize, Deserialize};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
@@ -85,6 +87,22 @@ const SYSTEM_INFO: libretro::SystemInfo = libretro::SystemInfo {
     block_extract: true,
 };
 
+/// Structure for serializing save states with disc information
+#[derive(Serialize)]
+struct SaveState<'a> {
+    psx: &'a psx::Psx,
+    disc_manager: &'a disc_control::MultiDiscManager,
+    current_disc_index: usize,
+}
+
+/// Structure for deserializing save states with disc information
+#[derive(Deserialize)]
+struct LoadedSaveState {
+    psx: psx::Psx,
+    disc_manager: disc_control::MultiDiscManager,
+    current_disc_index: usize,
+}
+
 /// Emulation context containing the emulator state
 struct Context {
     psx: Box<psx::Psx>,
@@ -92,6 +110,8 @@ struct Context {
     images: Vec<DiscImage>,
     /// Index of the currently selected image in `images`
     cur_image: usize,
+    /// Multi-disc manager for handling disc swaps
+    disc_manager: disc_control::MultiDiscManager,
     /// The type of controller connected on the two input ports
     controller_type: [libretro::InputDevice; 2],
     /// The type of MemoryCards connected to the console (user-configurable)
@@ -123,10 +143,15 @@ impl Context {
         let image = DiscImage::new(disc);
         let psx = Context::load_disc(&image)?;
 
+        // Initialize disc manager with the first disc
+        let disc_info = disc_control::DiscInfo::new(disc, 1);
+        let disc_manager = disc_control::MultiDiscManager::with_disc(disc_info);
+
         let mut ctx = Context {
             psx,
             images: vec![image],
             cur_image: 0,
+            disc_manager,
             // Start with both port disconnected and wait for the frontend to tell us what to use
             // in `set_controller`
             controller_type: [libretro::InputDevice::None; 2],
@@ -619,6 +644,9 @@ impl libretro::Context for Context {
         self.poll_controllers();
 
         self.psx.run_frame();
+        
+        // Update disc manager animation (assuming ~60fps, so ~16ms per frame)
+        self.disc_manager.update_animation(16);
 
         self.output_frame();
 
@@ -759,9 +787,16 @@ impl libretro::Context for Context {
         // it won't be correctly serialized.
         let _frame = self.psx.take_frame();
 
+        // Create a compound structure to serialize both PSX and disc manager state
+        let state = SaveState {
+            psx: &self.psx,
+            disc_manager: &self.disc_manager,
+            current_disc_index: self.cur_image,
+        };
+
         let mut fb = flexbuffers::FlexbufferSerializer::new();
 
-        if let Err(e) = self.psx.serialize(&mut fb) {
+        if let Err(e) = state.serialize(&mut fb) {
             error!("Couldn't serialize savestate: {}", e);
             return Err(());
         };
@@ -812,10 +847,22 @@ impl libretro::Context for Context {
             }
         };
 
-        if let Err(e) = self.psx.deserialize_and_load(fbr) {
-            error!("Failed to load savestate: {}", e);
-            return Err(());
-        };
+        // Try to deserialize the new format with disc manager
+        match LoadedSaveState::deserialize(fbr.clone()) {
+            Ok(state) => {
+                // Successfully loaded new format
+                *self.psx = Box::new(state.psx);
+                self.disc_manager = state.disc_manager;
+                self.cur_image = state.current_disc_index;
+            }
+            Err(_) => {
+                // Fall back to old format (just PSX state)
+                if let Err(e) = self.psx.deserialize_and_load(fbr) {
+                    error!("Failed to load savestate: {}", e);
+                    return Err(());
+                }
+            }
+        }
 
         libretro::Context::refresh_variables(self);
 
@@ -835,16 +882,34 @@ impl libretro::Context for Context {
     }
 
     fn is_disc_ejected(&self) -> bool {
-        !self.psx.cd.disc_present()
+        !self.psx.cd.disc_present() || self.disc_manager.is_tray_open()
     }
 
     fn eject_disc(&mut self) -> ::std::result::Result<(), ()> {
-        self.psx.cd.eject_disc();
+        // Start the ejection animation
+        if let Err(e) = self.disc_manager.start_eject() {
+            error!("Failed to start disc ejection: {}", e);
+            return Err(());
+        }
+        
+        // Actually eject the disc from the emulator
+        if let Some(disc) = self.psx.cd.eject_disc() {
+            // Update disc metadata in the manager
+            if let Some(current_info) = self.disc_manager.current_disc_info() {
+                self.disc_manager.load_disc_metadata(&disc, &current_info.path);
+            }
+        }
 
         Ok(())
     }
 
     fn insert_disc(&mut self) -> ::std::result::Result<(), ()> {
+        // Start the insertion animation
+        if let Err(e) = self.disc_manager.start_insert() {
+            error!("Failed to start disc insertion: {}", e);
+            return Err(());
+        }
+        
         let disc = match Context::load_image(self.cur_image()) {
             Ok(disc) => disc,
             Err(e) => {
@@ -852,6 +917,9 @@ impl libretro::Context for Context {
                 return Err(());
             }
         };
+
+        // Update disc metadata in the manager
+        self.disc_manager.load_disc_metadata(&disc, self.cur_image().path());
 
         // Swap the memory cards if necessary since they depend on the disc name
         self.setup_memory_cards();
@@ -875,6 +943,20 @@ impl libretro::Context for Context {
             return Err(());
         }
 
+        // Validate the disc swap with the manager
+        if let Err(e) = self.disc_manager.validate_disc_swap(Some(self.cur_image), index) {
+            error!("Invalid disc swap: {}", e);
+            return Err(());
+        }
+
+        // Update the disc manager's selection
+        if self.disc_manager.is_tray_open() {
+            if let Err(e) = self.disc_manager.select_disc(index) {
+                error!("Failed to select disc: {}", e);
+                return Err(());
+            }
+        }
+
         self.cur_image = index;
 
         Ok(())
@@ -895,6 +977,11 @@ impl libretro::Context for Context {
 
         self.images.push(new);
 
+        // Add to disc manager as well
+        let disc_number = (self.disc_manager.disc_count() + 1) as u8;
+        let disc_info = disc_control::DiscInfo::new("", disc_number);
+        self.disc_manager.add_disc(disc_info);
+
         Ok(())
     }
 
@@ -905,7 +992,19 @@ impl libretro::Context for Context {
         }
 
         match self.images.get_mut(index) {
-            Some(i) => *i = DiscImage::new(path),
+            Some(i) => {
+                *i = DiscImage::new(path);
+                
+                // Update disc manager's disc info
+                if let Some(disc_info) = self.disc_manager.get_disc_info_mut(index) {
+                    disc_info.path = path.to_path_buf();
+                    disc_info.label = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Unknown Disc")
+                        .to_string();
+                }
+            }
             None => {
                 error!("Image index {} out of range", index);
                 return Err(());
@@ -1479,4 +1578,9 @@ static CONTROLLER_INFO_2P: [libretro::ControllerInfo; 3] = [
 fn init_controllers() {
     libretro::set_controller_info(&CONTROLLER_INFO_2P);
     libretro::set_input_descriptors(&INPUT_DESCRIPTORS);
+    
+    // Register disc control interface for multi-disc support
+    if !libretro::disc_control::register_disc_control() {
+        warn!("Failed to register disc control interface - multi-disc games may not work properly");
+    }
 }
