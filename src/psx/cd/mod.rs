@@ -1,8 +1,11 @@
 //! LLE CD implementation
 
 mod cdc;
+pub mod chd;
 pub mod disc;
 pub mod iso9660;
+pub mod cache_overlay;
+pub mod cache_stats;
 
 use super::{irq, Addressable, Psx};
 use crate::error::{PsxError, Result};

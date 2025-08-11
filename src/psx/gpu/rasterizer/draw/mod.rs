@@ -1,4 +1,6 @@
 mod fixed_point;
+#[cfg(feature = "pgxp")]
+mod pgxp_renderer;
 
 #[cfg(test)]
 mod tests;
@@ -106,6 +108,10 @@ pub struct Rasterizer {
     /// Enhanced texture and CLUT cache
     #[serde(skip)]
     gpu_cache: GpuCache,
+    /// PGXP-enhanced renderer
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pgxp_renderer: pgxp_renderer::PgxpRasterizer,
 }
 
 impl Rasterizer {
@@ -140,6 +146,8 @@ impl Rasterizer {
             draw_wireframe: false,
             draw_polygons: true,
             gpu_cache: GpuCache::new(),
+            #[cfg(feature = "pgxp")]
+            pgxp_renderer: pgxp_renderer::PgxpRasterizer::new(),
         }
     }
 
@@ -347,6 +355,34 @@ impl Rasterizer {
             RasterizerOption::Wireframe(v) => self.draw_wireframe = v,
             RasterizerOption::DrawPolygons(v) => self.draw_polygons = v,
             RasterizerOption::UpscaleShift(v) => self.set_upscale_shift(v),
+            RasterizerOption::RenderingMode(mode) => {
+                // Handle rendering mode changes
+                match mode {
+                    crate::psx::gpu::rendering_pipeline::RenderingMode::Enhanced => {
+                        self.draw_24bpp = true;
+                        self.dithering_force_disable = true;
+                    }
+                    crate::psx::gpu::rendering_pipeline::RenderingMode::Original => {
+                        self.draw_24bpp = false;
+                        self.dithering_force_disable = false;
+                    }
+                    crate::psx::gpu::rendering_pipeline::RenderingMode::Hybrid => {
+                        // Internal 24-bit, output 15-bit
+                        self.draw_24bpp = false;
+                        self.dithering_force_disable = false;
+                    }
+                }
+                self.rebuild_dither_table();
+            }
+            RasterizerOption::PerspectiveCorrection(_) => {
+                // Perspective correction is handled in the enhanced rasterizer
+            }
+            RasterizerOption::SubPixelPrecision(_) => {
+                // Sub-pixel precision is handled via fixed-point math
+            }
+            RasterizerOption::ColorBanding(_) => {
+                // Color banding is handled in the rendering pipeline
+            }
         }
     }
 

@@ -4,17 +4,37 @@ mod rasterizer;
 mod error_handler;
 mod debug_overlay;
 pub mod texture_replacement;
+pub mod texture_cache;
+mod rendering_pipeline;
+mod enhanced_rasterizer;
+pub mod shader_cache;
+pub mod shader_manager;
+
+#[cfg(feature = "vulkan")]
+pub mod vulkan_shader;
+
+#[cfg(feature = "opengl")]
+pub mod opengl_shader;
+
+#[cfg(feature = "vulkan-renderer")]
+pub mod vulkan_renderer;
 
 #[cfg(test)]
 mod error_handler_tests;
+#[cfg(test)]
+mod rendering_test;
+#[cfg(test)]
+mod shader_cache_test;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
 use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
+pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
+use shader_manager::{ShaderManager, DrawState, ShaderHandle};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
@@ -105,6 +125,10 @@ pub struct Gpu {
     texture_replacement: Option<TextureReplacementSystem>,
     /// Current game ID for texture pack management
     current_game_id: String,
+    /// Hardware-accurate rendering pipeline
+    rendering_pipeline: RenderingPipeline,
+    /// Shader pre-compilation and cache manager
+    shader_manager: Option<ShaderManager>,
 }
 
 impl Gpu {
@@ -154,6 +178,8 @@ impl Gpu {
             debug_overlay: DebugOverlay::new(),
             texture_replacement: None,
             current_game_id: String::new(),
+            rendering_pipeline: RenderingPipeline::new(),
+            shader_manager: None,
         };
 
         gpu.refresh_lines_per_field();
@@ -280,6 +306,81 @@ impl Gpu {
         if let Some(ref mut tex_sys) = self.texture_replacement {
             tex_sys.update_config(config);
         }
+    }
+
+    /// Set rendering pipeline mode (Enhanced/Original)
+    pub fn set_rendering_mode(&mut self, mode: RenderingMode) {
+        self.rendering_pipeline.set_mode(mode);
+        // Notify rasterizer of mode change
+        let enhanced_24bit = mode == RenderingMode::Enhanced;
+        self.set_rasterizer_option(RasterizerOption::Draw24Bpp(enhanced_24bit));
+        self.set_rasterizer_option(RasterizerOption::DitherForceDisable(enhanced_24bit));
+    }
+    
+    /// Get current rendering mode
+    pub fn rendering_mode(&self) -> RenderingMode {
+        self.rendering_pipeline.mode()
+    }
+    
+    /// Enable/disable sub-pixel precision
+    pub fn set_subpixel_precision(&mut self, enabled: bool) {
+        self.rendering_pipeline.set_subpixel_precision(enabled);
+    }
+    
+    /// Enable/disable perspective correction
+    pub fn set_perspective_correction(&mut self, enabled: bool) {
+        self.rendering_pipeline.set_perspective_correction(enabled);
+    }
+    
+    /// Enable/disable color banding reproduction
+    pub fn set_color_banding(&mut self, enabled: bool) {
+        self.rendering_pipeline.set_color_banding(enabled);
+    }
+
+    /// Initialize shader cache system
+    pub fn init_shader_cache(&mut self, cache_dir: std::path::PathBuf, backend: shader_cache::ShaderBackend) {
+        match ShaderManager::new(cache_dir, backend) {
+            Ok(manager) => {
+                log::info!("Shader cache initialized with backend {:?}", backend);
+                self.shader_manager = Some(manager);
+            }
+            Err(e) => {
+                log::error!("Failed to initialize shader cache: {}", e);
+            }
+        }
+    }
+
+    /// Set game for shader cache
+    pub fn set_game_for_shaders(&mut self, game_id: String) {
+        if let Some(ref mut manager) = self.shader_manager {
+            manager.set_game(game_id);
+        }
+    }
+
+    /// Update shader manager (process compilation results)
+    pub fn update_shader_manager(&mut self) {
+        if let Some(ref mut manager) = self.shader_manager {
+            manager.update();
+        }
+    }
+
+    /// Get shader for current draw state
+    fn get_shader_for_state(&mut self, state: DrawState) -> Option<ShaderHandle> {
+        self.shader_manager.as_mut().map(|m| m.get_shader(&state))
+    }
+
+    /// Export shader pack for current game
+    pub fn export_shader_pack(&self, output_path: &str) -> Result<(), String> {
+        self.shader_manager.as_ref()
+            .ok_or_else(|| "Shader manager not initialized".to_string())?
+            .export_shader_pack(output_path)
+    }
+
+    /// Import shader pack
+    pub fn import_shader_pack(&mut self, pack_path: &str) -> Result<(), String> {
+        self.shader_manager.as_mut()
+            .ok_or_else(|| "Shader manager not initialized".to_string())?
+            .import_shader_pack(pack_path)
     }
 
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer

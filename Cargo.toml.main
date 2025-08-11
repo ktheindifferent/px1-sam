@@ -18,6 +18,11 @@ wasm-logger = "0.2"
 bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
+rayon = "1.7"
+num_cpus = "1.16"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+flexbuffers = "2.0"
 
 [dependencies.web-sys]
 version = "0.3"

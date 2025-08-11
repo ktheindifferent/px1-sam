@@ -3,8 +3,14 @@
 pub mod bios;
 pub mod cd;
 pub mod cop0;
+pub mod cop0_enhanced;
 pub mod cpu;
 pub mod cpu_instructions;
+pub mod cpu_pipeline;
+pub mod cpu_pipeline_integration;
+pub mod cpu_timing;
+#[cfg(test)]
+mod cpu_pipeline_tests;
 #[cfg(feature = "debugger")]
 pub mod debugger;
 mod cache;
@@ -17,6 +23,8 @@ mod link_cable;
 mod mdec;
 mod memory_control;
 pub mod memory_map;
+#[cfg(feature = "pgxp")]
+pub mod pgxp;
 pub mod overlay;
 pub mod pad_memcard;
 mod spu;
@@ -28,7 +36,7 @@ use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
 pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
-pub use spu::SpuDebugOverlay;
+pub use spu::{SpuDebugOverlay, interpolation};
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -66,6 +74,10 @@ pub struct Psx {
     cache_system: cache::CacheSystem,
     /// Enhanced memory control
     memory_ctrl: memory_control::MemoryControl,
+    /// PGXP precision enhancement system
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pub pgxp: pgxp::Pgxp,
     /// Memory control registers (legacy)
     mem_control: [u32; 9],
     /// Contents of the RAM_SIZE register which is probably a configuration register for the memory
@@ -126,6 +138,8 @@ impl Psx {
             link_cable: link_cable::LinkCable::new(),
             cache_system: cache::CacheSystem::new(),
             memory_ctrl: memory_control::MemoryControl::new(),
+            #[cfg(feature = "pgxp")]
+            pgxp: pgxp::Pgxp::new(),
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,
@@ -192,6 +206,16 @@ impl Psx {
         self.gpu.video_standard()
     }
 
+    /// Check if a frame is ready
+    pub fn frame_ready(&self) -> bool {
+        self.frame_done
+    }
+
+    /// Get the current frame
+    pub fn get_frame(&self) -> Frame {
+        self.gpu.get_frame()
+    }
+
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
         self.frame_done = false;
@@ -229,6 +253,36 @@ impl Psx {
     /// Clear any pending audio samples. This must be called at least once per frame.
     pub fn clear_audio_samples(&mut self) {
         spu::clear_samples(self)
+    }
+
+    /// Set SPU interpolation method
+    pub fn set_spu_interpolation_method(&mut self, method: spu::interpolation::InterpolationMethod) {
+        self.spu.set_interpolation_method(method);
+    }
+
+    /// Get current SPU interpolation method
+    pub fn get_spu_interpolation_method(&self) -> spu::interpolation::InterpolationMethod {
+        self.spu.get_interpolation_method()
+    }
+
+    /// Set SPU interpolation configuration
+    pub fn set_spu_interpolation_config(&mut self, config: spu::interpolation::InterpolationConfig) {
+        self.spu.set_interpolation_config(config);
+    }
+
+    /// Get SPU interpolation configuration
+    pub fn get_spu_interpolation_config(&self) -> &spu::interpolation::InterpolationConfig {
+        self.spu.get_interpolation_config()
+    }
+
+    /// Set game ID for SPU interpolation profiles
+    pub fn set_game_id_for_spu(&mut self, game_id: String) {
+        self.spu.set_game_id(game_id);
+    }
+
+    /// Add custom SPU interpolation game profile
+    pub fn add_spu_game_profile(&mut self, profile: spu::interpolation::GameProfile) {
+        self.spu.add_game_profile(profile);
     }
 
     /// Set the internal resolution upscaling factor
@@ -321,7 +375,18 @@ impl Psx {
         self.tick(self.dma_timing_penalty);
 
         if let Some(offset) = map::RAM.contains(abs_addr) {
-            self.tick(3);
+            // During DMA, CPU can still access RAM but with increased latency
+            let access_penalty = if self.cpu_stalled_for_dma {
+                // CPU is stalled, this shouldn't happen
+                0
+            } else if self.dma_timing_penalty > 0 {
+                // DMA is active, RAM access is slower
+                5
+            } else {
+                // Normal RAM access
+                3
+            };
+            self.tick(access_penalty);
             return self.xmem.ram_load(offset);
         }
 
@@ -399,6 +464,13 @@ impl Psx {
             // So any code that does "load IRQ register address -> load IRQ register" in sequence
             // will have 1f80 in the high bits, so it's a sane default.
             return Addressable::from_u32(v | 0x1f80_0000);
+        }
+
+        if let Some(offset) = map::SCRATCH_PAD.contains(abs_addr) {
+            // Scratchpad can be accessed during DMA without penalty
+            // This is crucial for games that use scratchpad for critical data during DMA
+            self.tick(1);
+            return self.scratch_pad.load(offset);
         }
 
         if let Some(offset) = map::EXPANSION_1.contains(abs_addr) {
