@@ -8,6 +8,7 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod crt_beam_renderer;
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan_shader;
@@ -33,11 +34,23 @@ pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
 
 const GPUSYNC: sync::SyncToken = sync::SyncToken::Gpu;
+
+/// CRT Beam Renderer presets for different display configurations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CrtBeamPreset {
+    Default,
+    Hz120,
+    Hz240Oled,
+    Hdr,
+    MaxMotionClarity,
+    AuthenticCrt,
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Gpu {
@@ -123,6 +136,10 @@ pub struct Gpu {
     rendering_pipeline: RenderingPipeline,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// Revolutionary CRT beam simulation renderer
+    crt_beam_renderer: Option<CrtBeamRenderer>,
+    /// CRT beam configuration
+    crt_beam_config: CrtBeamConfig,
 }
 
 impl Gpu {
@@ -172,6 +189,8 @@ impl Gpu {
             debug_overlay: DebugOverlay::new(),
             rendering_pipeline: RenderingPipeline::new(),
             shader_manager: None,
+            crt_beam_renderer: None,
+            crt_beam_config: CrtBeamConfig::default(),
         };
 
         gpu.refresh_lines_per_field();
@@ -260,6 +279,61 @@ impl Gpu {
         self.rendering_pipeline.set_color_banding(enabled);
     }
 
+    /// Initialize CRT beam simulation renderer
+    pub fn init_crt_beam_renderer(&mut self, width: u32, height: u32) -> Result<(), String> {
+        match CrtBeamRenderer::new(width, height) {
+            Ok(renderer) => {
+                log::info!("CRT Beam Renderer initialized at {}x{}", width, height);
+                self.crt_beam_renderer = Some(renderer);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to initialize CRT Beam Renderer: {}", e);
+                Err(e)
+            }
+        }
+    }
+    
+    /// Set CRT beam configuration
+    pub fn set_crt_beam_config(&mut self, config: CrtBeamConfig) {
+        self.crt_beam_config = config.clone();
+        if let Some(ref mut renderer) = self.crt_beam_renderer {
+            renderer.set_config(config);
+        }
+    }
+    
+    /// Get current CRT beam configuration
+    pub fn get_crt_beam_config(&self) -> &CrtBeamConfig {
+        &self.crt_beam_config
+    }
+    
+    /// Apply CRT beam preset
+    pub fn apply_crt_beam_preset(&mut self, preset: CrtBeamPreset) {
+        let config = match preset {
+            CrtBeamPreset::Default => CrtBeamConfig::default(),
+            CrtBeamPreset::Hz120 => CrtBeamConfig::preset_120hz(),
+            CrtBeamPreset::Hz240Oled => CrtBeamConfig::preset_240hz_oled(),
+            CrtBeamPreset::Hdr => CrtBeamConfig::preset_hdr(),
+            CrtBeamPreset::MaxMotionClarity => CrtBeamConfig::preset_max_motion_clarity(),
+            CrtBeamPreset::AuthenticCrt => CrtBeamConfig::preset_authentic_crt(),
+        };
+        self.set_crt_beam_config(config);
+    }
+    
+    /// Process frame through CRT beam renderer if enabled
+    pub fn apply_crt_beam_effect(&mut self, input_texture: u32, time: f64) -> Option<u32> {
+        if let Some(ref mut renderer) = self.crt_beam_renderer {
+            Some(renderer.render(input_texture, time))
+        } else {
+            None
+        }
+    }
+    
+    /// Get CRT beam renderer metrics
+    pub fn get_crt_beam_metrics(&self) -> Option<crt_beam_renderer::CrtBeamMetrics> {
+        self.crt_beam_renderer.as_ref().map(|r| r.get_metrics())
+    }
+    
     /// Initialize shader cache system
     pub fn init_shader_cache(&mut self, cache_dir: std::path::PathBuf, backend: shader_cache::ShaderBackend) {
         match ShaderManager::new(cache_dir, backend) {
