@@ -23,18 +23,21 @@ mod link_cable;
 mod mdec;
 mod memory_control;
 pub mod memory_map;
+#[cfg(feature = "pgxp")]
+pub mod pgxp;
 pub mod overlay;
 pub mod pad_memcard;
 mod spu;
 mod sync;
 mod timers;
 mod xmem;
+pub mod retroachievements;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
 pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
-pub use spu::SpuDebugOverlay;
+pub use spu::{SpuDebugOverlay, interpolation};
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -72,6 +75,10 @@ pub struct Psx {
     cache_system: cache::CacheSystem,
     /// Enhanced memory control
     memory_ctrl: memory_control::MemoryControl,
+    /// PGXP precision enhancement system
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pub pgxp: pgxp::Pgxp,
     /// Memory control registers (legacy)
     mem_control: [u32; 9],
     /// Contents of the RAM_SIZE register which is probably a configuration register for the memory
@@ -132,6 +139,8 @@ impl Psx {
             link_cable: link_cable::LinkCable::new(),
             cache_system: cache::CacheSystem::new(),
             memory_ctrl: memory_control::MemoryControl::new(),
+            #[cfg(feature = "pgxp")]
+            pgxp: pgxp::Pgxp::new(),
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,
@@ -245,6 +254,36 @@ impl Psx {
     /// Clear any pending audio samples. This must be called at least once per frame.
     pub fn clear_audio_samples(&mut self) {
         spu::clear_samples(self)
+    }
+
+    /// Set SPU interpolation method
+    pub fn set_spu_interpolation_method(&mut self, method: spu::interpolation::InterpolationMethod) {
+        self.spu.set_interpolation_method(method);
+    }
+
+    /// Get current SPU interpolation method
+    pub fn get_spu_interpolation_method(&self) -> spu::interpolation::InterpolationMethod {
+        self.spu.get_interpolation_method()
+    }
+
+    /// Set SPU interpolation configuration
+    pub fn set_spu_interpolation_config(&mut self, config: spu::interpolation::InterpolationConfig) {
+        self.spu.set_interpolation_config(config);
+    }
+
+    /// Get SPU interpolation configuration
+    pub fn get_spu_interpolation_config(&self) -> &spu::interpolation::InterpolationConfig {
+        self.spu.get_interpolation_config()
+    }
+
+    /// Set game ID for SPU interpolation profiles
+    pub fn set_game_id_for_spu(&mut self, game_id: String) {
+        self.spu.set_game_id(game_id);
+    }
+
+    /// Add custom SPU interpolation game profile
+    pub fn add_spu_game_profile(&mut self, profile: spu::interpolation::GameProfile) {
+        self.spu.add_game_profile(profile);
     }
 
     /// Set the internal resolution upscaling factor

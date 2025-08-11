@@ -23,3 +23,6 @@ mod integration_tests;
 
 #[cfg(test)]
 mod wasm_minimal_tests;
+
+#[cfg(test)]
+mod rewind_tests;
