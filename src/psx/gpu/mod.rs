@@ -5,6 +5,9 @@ mod error_handler;
 mod debug_overlay;
 pub mod texture_cache;
 
+#[cfg(feature = "vulkan-renderer")]
+pub mod vulkan_renderer;
+
 #[cfg(test)]
 mod error_handler_tests;
 
