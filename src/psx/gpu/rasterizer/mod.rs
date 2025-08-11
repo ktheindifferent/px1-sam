@@ -3,8 +3,14 @@
 //! one to send back the finished frames).
 
 mod draw;
+mod optimized;
+mod config;
+mod benchmark;
 
 pub use draw::Pixel;
+pub use optimized::{OptimizedRasterizer, RenderStats, ScanlineRenderer};
+pub use config::{RendererConfig, ProfileData};
+pub use benchmark::{RendererBenchmark, compare_renderers};
 use draw::Rasterizer;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::mpsc;
