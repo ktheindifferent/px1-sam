@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
-path = "src/wasm_unified.rs"
+path = "src/wasm_web.rs"
 
 [features]
 default = []
@@ -13,6 +13,8 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -56,8 +58,21 @@ features = [
   "HtmlElement",
   "Window",
   "CanvasRenderingContext2d",
+  "WebGl2RenderingContext",
+  "WebGlProgram",
+  "WebGlShader",
+  "WebGlTexture",
+  "WebGlBuffer",
+  "WebGlUniformLocation",
   "ImageData",
   "KeyboardEvent",
+  "MouseEvent",
+  "TouchEvent",
+  "Touch",
+  "TouchList",
+  "PointerEvent",
+  "WheelEvent",
+  "GamepadEvent",
   "AudioContext",
   "AudioBuffer",
   "AudioBufferSourceNode",
@@ -66,12 +81,30 @@ features = [
   "BaseAudioContext",
   "Gamepad",
   "GamepadButton",
+  "Navigator",
+  "Performance",
+  "Storage",
+  "IdbDatabase",
+  "IdbObjectStore",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbFactory",
+  "ServiceWorkerRegistration",
+  "ServiceWorkerContainer",
+  "Worker",
+  "MessagePort",
+  "OffscreenCanvas",
+  "Blob",
+  "File",
+  "FileReader",
+  "Url",
+  "UrlSearchParams",
+  "Response",
+  "RequestInit",
+  "RequestMode",
+  "Headers",
+  "WorkerGlobalScope",
 ]
-
-[features]
-default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
-online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [profile.release]
 opt-level = "s"
