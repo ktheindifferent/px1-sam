@@ -8,6 +8,8 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod crt_shaders;
+pub mod crt_shader_pipeline;
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan_shader;
