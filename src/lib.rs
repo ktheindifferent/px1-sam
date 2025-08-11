@@ -46,6 +46,8 @@ mod box_array;
 mod disc_control;
 mod error;
 mod memory_card;
+mod memory_card_manager;
+mod psx_memory_card_integration;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
