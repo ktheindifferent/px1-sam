@@ -31,6 +31,9 @@ mod spu;
 mod sync;
 mod timers;
 mod xmem;
+pub mod run_ahead;
+pub mod fast_savestate;
+pub mod run_ahead_integration;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
@@ -216,20 +219,27 @@ impl Psx {
         self.gpu.get_frame()
     }
 
+    /// Step the emulator by one CPU instruction or event
+    pub fn step(&mut self) {
+        if self.cpu_stalled_for_dma {
+            // Fast forward to the next event
+            self.cycle_counter = self.sync.first_event();
+        } else {
+            if !sync::is_event_pending(self) {
+                cpu::run_next_instruction(self);
+            }
+        }
+
+        if sync::is_event_pending(self) {
+            sync::handle_events(self);
+        }
+    }
+
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
         self.frame_done = false;
         while !self.frame_done {
-            if self.cpu_stalled_for_dma {
-                // Fast forward to the next event
-                self.cycle_counter = self.sync.first_event();
-            } else {
-                while !sync::is_event_pending(self) {
-                    cpu::run_next_instruction(self);
-                }
-            }
-
-            sync::handle_events(self);
+            self.step();
         }
 
         // Update developer overlay if enabled

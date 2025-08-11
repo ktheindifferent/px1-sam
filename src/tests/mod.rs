@@ -19,6 +19,9 @@ mod input_validation_tests;
 mod memory_safety_tests;
 
 #[cfg(test)]
+mod run_ahead_tests;
+
+#[cfg(test)]
 mod integration_tests;
 
 #[cfg(test)]
