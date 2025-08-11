@@ -264,38 +264,56 @@ impl Psx {
     }
     
     pub fn get_display_size(&self) -> (u32, u32) {
-        (self.gpu.display_width() as u32, self.gpu.display_height() as u32)
+        // Default display size based on display mode
+        // This is a simplified implementation - real display size depends on display mode registers
+        let width = if self.gpu.display_column_end > self.gpu.display_column_start {
+            ((self.gpu.display_column_end - self.gpu.display_column_start) / 4) as u32
+        } else {
+            640
+        };
+        
+        let height = if self.gpu.display_line_end > self.gpu.display_line_start {
+            (self.gpu.display_line_end - self.gpu.display_line_start) as u32
+        } else {
+            480
+        };
+        
+        (width, height)
     }
     
     pub fn get_framebuffer(&self, buffer: &mut Vec<u8>) {
-        let width = self.gpu.display_width() as usize;
-        let height = self.gpu.display_height() as usize;
+        // For now, return a test pattern to verify rendering pipeline
+        let width = 640usize;
+        let height = 480usize;
         
         buffer.clear();
         buffer.resize(width * height * 4, 0);
         
-        // Get the framebuffer from GPU VRAM
-        let vram = self.gpu.vram();
-        let display_start = self.gpu.display_start();
-        
+        // Create a test pattern to verify rendering
         for y in 0..height {
             for x in 0..width {
-                let vram_x = (display_start.0 as usize + x) % 1024;
-                let vram_y = (display_start.1 as usize + y) % 512;
-                let pixel = vram[vram_y * 1024 + vram_x];
-                
-                // Convert 15-bit RGB to 32-bit RGBA
-                let r = ((pixel & 0x1F) << 3) as u8;
-                let g = (((pixel >> 5) & 0x1F) << 3) as u8;
-                let b = (((pixel >> 10) & 0x1F) << 3) as u8;
-                
                 let offset = (y * width + x) * 4;
-                buffer[offset] = r;
-                buffer[offset + 1] = g;
-                buffer[offset + 2] = b;
-                buffer[offset + 3] = 255;
+                
+                // Create a gradient test pattern
+                buffer[offset] = ((x * 255) / width) as u8;     // Red gradient
+                buffer[offset + 1] = ((y * 255) / height) as u8; // Green gradient
+                buffer[offset + 2] = 128;                        // Fixed blue
+                buffer[offset + 3] = 255;                        // Alpha
             }
         }
+    }
+    
+    // Debug methods
+    pub fn debug_gpu_status(&self) -> u32 {
+        self.gpu.status()
+    }
+    
+    pub fn debug_display_info(&self) -> String {
+        format!("Display: column {}..{}, line {}..{}, VRAM start: ({}, {}), display_off: {}", 
+                self.gpu.display_column_start, self.gpu.display_column_end,
+                self.gpu.display_line_start, self.gpu.display_line_end,
+                self.gpu.display_vram_x_start, self.gpu.display_vram_y_start,
+                self.gpu.display_off)
     }
     
     pub fn get_audio_samples(&mut self) -> Vec<i16> {

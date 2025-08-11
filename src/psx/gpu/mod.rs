@@ -91,6 +91,8 @@ pub struct Gpu {
 
 impl Gpu {
     pub fn new(video_standard: VideoStandard) -> Gpu {
+        log::info!("GPU: Initializing with video standard: {:?}", video_standard);
+        
         let mut gpu = Gpu {
             state: State::Idle,
             rasterizer: rasterizer::start(),
@@ -134,6 +136,8 @@ impl Gpu {
         };
 
         gpu.refresh_lines_per_field();
+        
+        log::info!("GPU: Initialization complete. Lines per field: {}", gpu.lines_per_field);
 
         gpu
     }

@@ -393,6 +393,17 @@ impl PsxEmulator {
             return Ok(());
         }
         
+        static mut FRAME_COUNT: u32 = 0;
+        unsafe {
+            FRAME_COUNT += 1;
+            if FRAME_COUNT % 60 == 0 {
+                console_log!("🎬 Frame {}: Running frame", FRAME_COUNT);
+                console_log!("  📍 CPU PC: 0x{:08x}", self.psx.cpu.pc);
+                console_log!("  📺 GPU Status: 0x{:08x}", self.psx.debug_gpu_status());
+                console_log!("  🖼️ {}", self.psx.debug_display_info());
+            }
+        }
+        
         self.update_input();
         
         self.psx.run_frame().map_err(|e| {
@@ -443,9 +454,26 @@ impl PsxEmulator {
         let width = 640u32;
         let height = 480u32;
         
+        // Debug: Check if we have any non-zero pixels
+        static mut RENDER_COUNT: u32 = 0;
+        unsafe {
+            RENDER_COUNT += 1;
+            if RENDER_COUNT % 60 == 0 {
+                let mut non_zero = 0;
+                for chunk in self.frame_buffer.chunks(4) {
+                    if chunk[0] != 0 || chunk[1] != 0 || chunk[2] != 0 {
+                        non_zero += 1;
+                    }
+                }
+                console_log!("🎨 Render {}: Non-zero pixels: {}/{}", 
+                           RENDER_COUNT, non_zero, self.frame_buffer.len() / 4);
+            }
+        }
+        
         if self.canvas.width() != width || self.canvas.height() != height {
             self.canvas.set_width(width);
             self.canvas.set_height(height);
+            console_log!("📐 Canvas resized to {}x{}", width, height);
         }
         
         let image_data = ImageData::new_with_u8_clamped_array_and_sh(
@@ -468,7 +496,12 @@ impl PsxEmulator {
     
     pub fn start(&mut self) {
         *self.running.borrow_mut() = true;
-        console_log!("Emulator started");
+        console_log!("▶️ Emulator started");
+        console_log!("🔍 Initial state:");
+        console_log!("  CPU PC: 0x{:08x}", self.psx.cpu.pc);
+        console_log!("  GPU Status: 0x{:08x}", self.psx.debug_gpu_status());
+        console_log!("  {}", self.psx.debug_display_info());
+        console_log!("  Disc loaded: {}", *self.disc_loaded.borrow());
     }
     
     pub fn stop(&mut self) {
@@ -517,5 +550,121 @@ impl PsxEmulator {
     
     pub fn load_save_state(&mut self, _state: &[u8]) -> std::result::Result<(), JsValue> {
         Err(JsValue::from_str("Save states not yet implemented"))
+    }
+    
+    // Debug functions
+    pub fn debug_get_gpu_status(&self) -> String {
+        format!("GPU Status: 0x{:08x}", self.psx.debug_gpu_status())
+    }
+    
+    pub fn debug_get_cpu_pc(&self) -> String {
+        format!("CPU PC: 0x{:08x}", self.psx.cpu.pc)
+    }
+    
+    pub fn debug_get_display_info(&self) -> String {
+        self.psx.debug_display_info()
+    }
+    
+    pub fn debug_test_render(&mut self) -> std::result::Result<(), JsValue> {
+        console_log!("🧪 Testing render pipeline...");
+        
+        // Fill frame buffer with test pattern
+        let width = 640usize;
+        let height = 480usize;
+        
+        self.frame_buffer.clear();
+        self.frame_buffer.resize(width * height * 4, 0);
+        
+        // Create a colorful test pattern
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) * 4;
+                
+                // Create diagonal stripes
+                let stripe = ((x + y) / 20) % 3;
+                match stripe {
+                    0 => {
+                        self.frame_buffer[offset] = 255;     // Red
+                        self.frame_buffer[offset + 1] = 0;
+                        self.frame_buffer[offset + 2] = 0;
+                    }
+                    1 => {
+                        self.frame_buffer[offset] = 0;
+                        self.frame_buffer[offset + 1] = 255; // Green
+                        self.frame_buffer[offset + 2] = 0;
+                    }
+                    _ => {
+                        self.frame_buffer[offset] = 0;
+                        self.frame_buffer[offset + 1] = 0;
+                        self.frame_buffer[offset + 2] = 255; // Blue
+                    }
+                }
+                self.frame_buffer[offset + 3] = 255; // Alpha
+            }
+        }
+        
+        // Update canvas size if needed
+        if self.canvas.width() != width as u32 || self.canvas.height() != height as u32 {
+            self.canvas.set_width(width as u32);
+            self.canvas.set_height(height as u32);
+            console_log!("📐 Canvas resized to {}x{}", width, height);
+        }
+        
+        // Draw to canvas
+        let image_data = ImageData::new_with_u8_clamped_array_and_sh(
+            wasm_bindgen::Clamped(&self.frame_buffer),
+            width as u32,
+            height as u32,
+        )?;
+        
+        self.context.put_image_data(&image_data, 0.0, 0.0)?;
+        
+        console_log!("✅ Test pattern rendered to canvas");
+        
+        Ok(())
+    }
+    
+    pub fn debug_step_cpu(&mut self, steps: u32) -> String {
+        let mut result = String::new();
+        result.push_str(&format!("Stepping CPU {} times:\n", steps));
+        
+        for i in 0..steps {
+            let pc_before = self.psx.cpu.pc;
+            
+            match self.psx.cpu.run_next_instruction(&mut self.psx) {
+                Ok(cycles) => {
+                    result.push_str(&format!("  Step {}: PC 0x{:08x} -> 0x{:08x} (cycles: {})\n", 
+                                           i, pc_before, self.psx.cpu.pc, cycles.0));
+                }
+                Err(e) => {
+                    result.push_str(&format!("  Step {}: Error at PC 0x{:08x}: {:?}\n", 
+                                           i, pc_before, e));
+                    break;
+                }
+            }
+        }
+        
+        result
+    }
+    
+    pub fn debug_check_bios(&self) -> String {
+        let mut result = String::new();
+        
+        // Check if BIOS is loaded
+        let bios_start = self.psx.load::<u32>(0xbfc00000);
+        let bios_magic = self.psx.load::<u32>(0xbfc00004);
+        
+        result.push_str(&format!("BIOS check:\n"));
+        result.push_str(&format!("  First word: 0x{:08x}\n", bios_start));
+        result.push_str(&format!("  Second word: 0x{:08x}\n", bios_magic));
+        
+        // Check for common BIOS entry points
+        let reset_vector = self.psx.load::<u32>(0xbfc00000);
+        let exception_vector = self.psx.load::<u32>(0xbfc00180);
+        
+        result.push_str(&format!("  Reset vector (0xbfc00000): 0x{:08x}\n", reset_vector));
+        result.push_str(&format!("  Exception vector (0xbfc00180): 0x{:08x}\n", exception_vector));
+        
+        result
     }
 }
