@@ -17,6 +17,8 @@ mod link_cable;
 mod mdec;
 mod memory_control;
 pub mod memory_map;
+#[cfg(feature = "pgxp")]
+pub mod pgxp;
 pub mod overlay;
 pub mod pad_memcard;
 mod spu;
@@ -66,6 +68,10 @@ pub struct Psx {
     cache_system: cache::CacheSystem,
     /// Enhanced memory control
     memory_ctrl: memory_control::MemoryControl,
+    /// PGXP precision enhancement system
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pub pgxp: pgxp::Pgxp,
     /// Memory control registers (legacy)
     mem_control: [u32; 9],
     /// Contents of the RAM_SIZE register which is probably a configuration register for the memory
@@ -126,6 +132,8 @@ impl Psx {
             link_cable: link_cable::LinkCable::new(),
             cache_system: cache::CacheSystem::new(),
             memory_ctrl: memory_control::MemoryControl::new(),
+            #[cfg(feature = "pgxp")]
+            pgxp: pgxp::Pgxp::new(),
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,
