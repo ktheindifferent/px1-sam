@@ -8,11 +8,14 @@ crate-type = ["cdylib"]
 path = "src/wasm_unified.rs"
 
 [features]
-default = []
+default = ["game-library"]
 pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+game-library = []
+compatibility-db = []
+online-sync = ["compatibility-db"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -25,11 +28,13 @@ wasm-logger = "0.2"
 bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
-rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
-chrono = { version = "0.4", features = ["serde"], optional = true }
-uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
-reqwest = { version = "0.11", features = ["json"], optional = true }
-tokio = { version = "1", features = ["rt", "macros"], optional = true }
+rusqlite = { version = "0.30", features = ["bundled", "serde_json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+reqwest = { version = "0.11", features = ["json"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+regex = "1.10"
+async-trait = "0.1"
 
 # Shader compilation dependencies
 crossbeam-channel = "0.5"
@@ -69,9 +74,10 @@ features = [
 ]
 
 [features]
-default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
-online-sync = ["reqwest", "tokio", "compatibility-db"]
+default = ["game-library"]
+game-library = []
+compatibility-db = []
+online-sync = ["compatibility-db"]
 
 [profile.release]
 opt-level = "s"
@@ -79,3 +85,6 @@ lto = true
 
 [package.metadata.wasm-pack]
 wasm-opt = false
+
+[dev-dependencies]
+tempfile = "3.8"

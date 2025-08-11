@@ -48,6 +48,9 @@ mod error;
 mod memory_card;
 mod memory_card_manager;
 mod psx_memory_card_integration;
+
+#[cfg(feature = "game-library")]
+pub mod game_library;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
