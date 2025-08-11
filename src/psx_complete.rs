@@ -2195,6 +2195,43 @@ impl Psx {
         // R0 is always 0
         self.cpu.regs[0] = 0;
     }
+    
+    pub fn debug_gpu_status(&self) -> u32 {
+        self.gpu.get_status()
+    }
+    
+    pub fn debug_display_info(&self) -> String {
+        format!("Display: {}x{} @ ({}, {}), Draw area: ({},{}) to ({},{})",
+            self.gpu.display_x2 - self.gpu.display_x1,
+            self.gpu.display_y2 - self.gpu.display_y1,
+            self.gpu.display_x,
+            self.gpu.display_y,
+            self.gpu.draw_x1,
+            self.gpu.draw_y1,
+            self.gpu.draw_x2,
+            self.gpu.draw_y2
+        )
+    }
+    
+    pub fn run_next_instruction(&mut self) -> Result<()> {
+        // Simple wrapper to run a single CPU instruction
+        self.cpu.current_pc = self.cpu.pc;
+        
+        // Fetch instruction
+        let instruction = self.load32(self.cpu.pc)?;
+        
+        // Advance PC
+        self.cpu.pc = self.cpu.next_pc;
+        self.cpu.next_pc = self.cpu.pc.wrapping_add(4);
+        
+        // Execute the instruction
+        self.execute_cpu_instruction(instruction);
+        
+        // Tick cycles
+        self.tick(1);
+        
+        Ok(())
+    }
 }
 
 fn mask_region(addr: u32) -> u32 {

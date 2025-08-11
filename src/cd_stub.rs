@@ -195,5 +195,7 @@ pub struct XaCodingAudio {
 }
 
 pub mod sector {
+    // Re-export sector-related types (currently unused but may be needed later)
+    #[allow(unused_imports)]
     pub use super::{XaSamplingFreq, XaBitsPerSample, XaCodingAudio, Sector};
 }
