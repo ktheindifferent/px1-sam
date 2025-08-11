@@ -1,6 +1,7 @@
 //! LLE CD implementation
 
 mod cdc;
+pub mod chd;
 pub mod disc;
 pub mod iso9660;
 
