@@ -983,7 +983,7 @@ pub enum Gp0Command {
 
 impl Gpu {
     pub fn new() -> Self {
-        let mut gpu = Gpu {
+        Gpu {
             vram: vec![0; VRAM_SIZE],
             display_mode: 0,
             display_x: 0,
@@ -1011,17 +1011,7 @@ impl Gpu {
             gp0_words_remaining: 0,
             gp0_buffer: Vec::new(),
             dma_direction: DmaDirection::Off,
-        };
-        
-        // Initialize with a simple test pattern to verify rendering
-        // This avoids the gradient test pattern and shows actual rendering
-        gpu.fill_rect(10, 10, 100, 50, 0x00ff00);   // Green rectangle
-        gpu.fill_rect(120, 10, 100, 50, 0xff0000);  // Blue rectangle  
-        gpu.fill_rect(230, 10, 100, 50, 0x0000ff);  // Red rectangle
-        gpu.fill_rect(10, 70, 320, 20, 0xffffff);   // White bar
-        gpu.fill_rect(10, 100, 320, 20, 0x808080);  // Gray bar
-        
-        gpu
+        }
     }
     
     pub fn gp0_write(&mut self, val: u32) {
@@ -1230,48 +1220,39 @@ impl Gpu {
         
         buffer.resize(width * height * 4, 0);
         
-        // Check if VRAM has any non-zero data
-        let has_data = self.vram.iter().any(|&p| p != 0);
+        // Always render from VRAM, even if it appears empty
+        // The display coordinates tell us what part of VRAM to show
+        let start_x = self.display_x as usize;
+        let start_y = self.display_y as usize;
         
-        if !has_data {
-            // Display a test pattern if no data in VRAM
-            for y in 0..height {
-                for x in 0..width {
-                    let buffer_idx = (y * width + x) * 4;
-                    // Create a gradient test pattern
-                    buffer[buffer_idx] = ((x * 255) / width) as u8;     // R
-                    buffer[buffer_idx + 1] = ((y * 255) / height) as u8; // G  
-                    buffer[buffer_idx + 2] = 128;                        // B
-                    buffer[buffer_idx + 3] = 255;                        // A
-                }
-            }
-        } else {
-            // Normal VRAM rendering
-            let start_x = self.display_x as usize;
-            let start_y = self.display_y as usize;
-            
-            for y in 0..height {
-                for x in 0..width {
-                    let vram_x = (start_x + x) & 0x3ff;
-                    let vram_y = (start_y + y) & 0x1ff;
-                    let vram_idx = vram_y * 1024 + vram_x;
-                    
-                    let pixel = if vram_idx < self.vram.len() {
-                        self.vram[vram_idx]
-                    } else {
-                        0
-                    };
-                    
-                    let r = ((pixel & 0x1f) << 3) as u8;
-                    let g = (((pixel >> 5) & 0x1f) << 3) as u8;
-                    let b = (((pixel >> 10) & 0x1f) << 3) as u8;
-                    
-                    let buffer_idx = (y * width + x) * 4;
-                    buffer[buffer_idx] = r;
-                    buffer[buffer_idx + 1] = g;
-                    buffer[buffer_idx + 2] = b;
-                    buffer[buffer_idx + 3] = 255;
-                }
+        for y in 0..height {
+            for x in 0..width {
+                // Calculate VRAM coordinates with wrapping
+                let vram_x = (start_x + x) & 0x3ff;
+                let vram_y = (start_y + y) & 0x1ff;
+                let vram_idx = vram_y * 1024 + vram_x;
+                
+                let pixel = if vram_idx < self.vram.len() {
+                    self.vram[vram_idx]
+                } else {
+                    0
+                };
+                
+                // Convert 15-bit BGR to 32-bit RGBA
+                let r = ((pixel & 0x1f) << 3) as u8;
+                let g = (((pixel >> 5) & 0x1f) << 3) as u8;
+                let b = (((pixel >> 10) & 0x1f) << 3) as u8;
+                
+                // Expand 5-bit color to 8-bit by filling lower bits
+                let r = r | (r >> 5);
+                let g = g | (g >> 5);
+                let b = b | (b >> 5);
+                
+                let buffer_idx = (y * width + x) * 4;
+                buffer[buffer_idx] = r;
+                buffer[buffer_idx + 1] = g;
+                buffer[buffer_idx + 2] = b;
+                buffer[buffer_idx + 3] = 255;
             }
         }
     }
