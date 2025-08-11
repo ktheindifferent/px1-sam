@@ -142,6 +142,7 @@
             <button id="load-btn">Load & Start</button>
             <button id="stop-btn" disabled>Stop</button>
             <button id="reset-btn" disabled>Reset</button>
+            <button id="test-render-btn">Test Render</button>
         </div>
         
         <div class="status" id="status">
@@ -194,6 +195,7 @@
         const loadBtn = document.getElementById('load-btn');
         const stopBtn = document.getElementById('stop-btn');
         const resetBtn = document.getElementById('reset-btn');
+        const testRenderBtn = document.getElementById('test-render-btn');
         const biosFile = document.getElementById('bios-file');
         const gameFile = document.getElementById('game-file');
         const cueFile = document.getElementById('cue-file');
@@ -387,6 +389,22 @@
         loadBtn.addEventListener('click', startEmulation);
         stopBtn.addEventListener('click', stopEmulation);
         resetBtn.addEventListener('click', resetEmulation);
+        testRenderBtn.addEventListener('click', async () => {
+            try {
+                if (!emulator) {
+                    await init();
+                    emulator = PsxEmulator.new(canvas);
+                    console.log('Created emulator for test render');
+                }
+                emulator.test_render();
+                // Manually trigger a frame render to show the test pattern
+                emulator.run_frame();
+                setStatus('Test pattern rendered', 'success');
+            } catch (error) {
+                console.error('Test render error:', error);
+                setStatus(`Test render failed: ${error}`, 'error');
+            }
+        });
     </script>
 </body>
 </html>

@@ -1256,6 +1256,22 @@ impl Gpu {
             }
         }
     }
+    
+    pub fn test_render(&mut self) {
+        // Generate a test pattern in VRAM to verify rendering
+        for y in 0..480 {
+            for x in 0..640 {
+                let vram_idx = y * 1024 + x;
+                if vram_idx < self.vram.len() {
+                    // Create a gradient pattern
+                    let r = ((x * 31) / 640) as u16;
+                    let g = ((y * 31) / 480) as u16;
+                    let b = 15u16;
+                    self.vram[vram_idx] = r | (g << 5) | (b << 10);
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -2211,6 +2227,10 @@ impl Psx {
             self.gpu.draw_x2,
             self.gpu.draw_y2
         )
+    }
+    
+    pub fn test_render_gpu(&mut self) {
+        self.gpu.test_render();
     }
     
     pub fn run_next_instruction(&mut self) -> Result<()> {

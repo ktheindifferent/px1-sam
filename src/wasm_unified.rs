@@ -232,10 +232,14 @@ impl PsxEmulator {
             .ok_or_else(|| JsValue::from_str("Failed to get 2D context"))?
             .dyn_into::<CanvasRenderingContext2d>()?;
         
-        let psx = Psx::new().map_err(|e| {
+        let mut psx = Psx::new().map_err(|e| {
             console_error!("Failed to create PSX: {:?}", e);
             JsValue::from_str(&format!("Failed to create PSX: {:?}", e))
         })?;
+        
+        // Generate initial test pattern
+        console_log!("🎨 Generating initial test pattern...");
+        psx.test_render_gpu();
         
         let audio_context = web_sys::window()
             .and_then(|w| w.document())
@@ -563,6 +567,13 @@ impl PsxEmulator {
     
     pub fn debug_get_display_info(&self) -> String {
         self.psx.debug_display_info()
+    }
+    
+    pub fn test_render(&mut self) -> std::result::Result<(), JsValue> {
+        console_log!("🎨 Generating test render pattern...");
+        self.psx.test_render_gpu();
+        console_log!("✅ Test pattern generated in VRAM");
+        Ok(())
     }
     
     pub fn debug_test_render(&mut self) -> std::result::Result<(), JsValue> {
