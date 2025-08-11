@@ -7,6 +7,11 @@ pub mod guncon;
 pub mod multitap;
 pub mod fishing;
 pub mod dance_mat;
+pub mod controller_manager;
+pub mod rumble_effects;
+pub mod enhanced_mouse;
+pub mod enhanced_guncon;
+pub mod enhanced_multitap;
 
 // Re-export common types
 pub use peripheral_trait::{Peripheral as PeripheralTrait, Response};
