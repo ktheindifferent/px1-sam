@@ -43,4 +43,6 @@ pub enum PsxError {
     NetworkError(String),
     #[error("Emulation error: {0}")]
     EmulationError(String),
+    #[error("Save state error during {operation}: {reason}")]
+    SaveStateError { operation: String, reason: String },
 }
