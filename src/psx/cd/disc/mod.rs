@@ -1,12 +1,22 @@
 use super::iso9660;
+use super::chd;
 use crate::error::{PsxError, Result};
 use crate::psx::gpu::VideoStandard;
 pub use cache::Cache as CdCache;
 use cache::CachedResult;
-use cdimage::{Bcd, CdResult, DiscPosition, Image, Msf, Sector, Toc};
+use crate::cdimage::{Bcd, CdResult, DiscPosition, Image, Msf, Sector, Toc};
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
 use std::fmt;
+use std::path::Path;
+
+// Simple logging macro
+macro_rules! disc_log {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        eprintln!("[DISC] {}", format!($($arg)*));
+    };
+}
 
 mod cache;
 
@@ -31,6 +41,73 @@ impl Disc {
         let disc = Disc { cache, serial };
 
         Ok(disc)
+    }
+
+    /// Load a disc from a CHD file
+    pub fn from_chd<P: AsRef<Path>>(path: P) -> Result<Disc> {
+        let image = chd::ChdImage::open(path)?;
+        Self::new(Box::new(image))
+    }
+
+    /// Load a disc with CHD format detection and fallback support
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Disc> {
+        let path_ref = path.as_ref();
+        
+        // Check if it's a CHD file
+        if chd::is_chd_file(path_ref) {
+            disc_log!("Detected CHD format, loading CHD image");
+            
+            // Try to load CHD with fallback support
+            match Self::from_chd(path_ref) {
+                Ok(disc) => Ok(disc),
+                Err(e) => {
+                    disc_log!("Failed to load CHD file: {:?}", e);
+                    
+                    // Look for fallback BIN/CUE files
+                    let fallback_path = Self::find_fallback_image(path_ref);
+                    
+                    if let Some(fallback) = fallback_path {
+                        disc_log!("Attempting to load fallback image: {:?}", fallback);
+                        Self::load_fallback(fallback)
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        } else {
+            // Try other formats
+            Self::load_fallback(path_ref.to_path_buf())
+        }
+    }
+    
+    /// Find a fallback BIN/CUE file for a corrupted CHD
+    fn find_fallback_image(chd_path: &Path) -> Option<std::path::PathBuf> {
+        // Look for BIN/CUE files with the same base name
+        if let Some(stem) = chd_path.file_stem() {
+            if let Some(parent) = chd_path.parent() {
+                // Check for .cue file
+                let cue_path = parent.join(stem).with_extension("cue");
+                if cue_path.exists() {
+                    return Some(cue_path);
+                }
+                
+                // Check for .bin file
+                let bin_path = parent.join(stem).with_extension("bin");
+                if bin_path.exists() {
+                    return Some(bin_path);
+                }
+            }
+        }
+        None
+    }
+    
+    /// Load a fallback image (BIN/CUE or other format)
+    fn load_fallback(path: std::path::PathBuf) -> Result<Disc> {
+        // In a real implementation, this would use the cdimage crate
+        // to load BIN/CUE files. For now, return an error.
+        Err(PsxError::BadDiscFormat(
+            format!("Fallback loading not yet implemented for: {:?}", path)
+        ))
     }
 
     /// Instantiate a placeholder disc that will generate errors when used
@@ -245,7 +322,7 @@ fn parse_serial_number_from_system_cnf(system_cnf: &[u8]) -> Result<SerialNumber
     let boot_path = match boot_path {
         Some(b) => b,
         None => {
-            warn!("Couldn't find BOOT line in SYSTEM.CNF");
+            disc_log!("Couldn't find BOOT line in SYSTEM.CNF");
             return Err(PsxError::NoSerialNumber);
         }
     };
@@ -264,7 +341,7 @@ fn parse_serial_number_from_system_cnf(system_cnf: &[u8]) -> Result<SerialNumber
     let serial = SerialNumber::from_bin_name(bin_name);
 
     if serial.is_err() {
-        warn!("Unexpected bin name: {}", String::from_utf8_lossy(bin_name));
+        disc_log!("Unexpected bin name: {}", String::from_utf8_lossy(bin_name));
     }
 
     serial
