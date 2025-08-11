@@ -3,7 +3,7 @@ mod fifo;
 mod rasterizer;
 mod error_handler;
 mod debug_overlay;
-pub mod texture_cache;
+pub mod texture_replacement;
 
 #[cfg(test)]
 mod error_handler_tests;
@@ -14,6 +14,7 @@ use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
+use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
@@ -100,6 +101,10 @@ pub struct Gpu {
     read_word: u32,
     /// Debug overlay for error visualization
     debug_overlay: DebugOverlay,
+    /// Texture replacement system
+    texture_replacement: Option<TextureReplacementSystem>,
+    /// Current game ID for texture pack management
+    current_game_id: String,
 }
 
 impl Gpu {
@@ -147,6 +152,8 @@ impl Gpu {
             display_off: true,
             read_word: 0,
             debug_overlay: DebugOverlay::new(),
+            texture_replacement: None,
+            current_game_id: String::new(),
         };
 
         gpu.refresh_lines_per_field();
@@ -203,6 +210,75 @@ impl Gpu {
             let stats = handler.get_stats();
             let recent_errors = handler.get_recent_errors(10);
             self.debug_overlay.update(stats, &recent_errors);
+        }
+    }
+    
+    /// Initialize texture replacement system
+    pub fn init_texture_replacement(&mut self, config: TextureReplacementConfig) {
+        log::info!("Initializing texture replacement system");
+        self.texture_replacement = Some(TextureReplacementSystem::new(config));
+    }
+    
+    /// Set current game ID for texture pack management
+    pub fn set_game_id(&mut self, game_id: String) {
+        log::info!("Setting game ID: {}", game_id);
+        self.current_game_id = game_id;
+    }
+    
+    /// Load texture pack for current game
+    pub fn load_texture_pack(&mut self, pack_name: &str) -> Result<(), String> {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            tex_sys.load_texture_pack(&self.current_game_id, pack_name)
+        } else {
+            Err("Texture replacement system not initialized".to_string())
+        }
+    }
+    
+    /// Process texture for potential replacement
+    fn process_texture_replacement(
+        &mut self,
+        vram_data: &[u16],
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        clut_data: Option<&[u16]>,
+    ) -> Option<texture_replacement::LoadedTexture> {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            tex_sys.process_texture(
+                vram_data,
+                x,
+                y,
+                width,
+                height,
+                clut_data,
+                &self.current_game_id,
+            )
+        } else {
+            None
+        }
+    }
+    
+    /// Poll for async texture loads
+    pub fn poll_texture_loads(&mut self) {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            let loaded = tex_sys.poll_async_loads();
+            for (hash, texture) in loaded {
+                log::debug!("Loaded replacement texture: {}", hash.to_string());
+                // The texture is now in cache and will be used on next access
+            }
+        }
+    }
+    
+    /// Get texture replacement configuration
+    pub fn texture_replacement_config(&self) -> Option<TextureReplacementConfig> {
+        self.texture_replacement.as_ref().map(|sys| sys.config())
+    }
+    
+    /// Update texture replacement configuration
+    pub fn update_texture_replacement_config(&mut self, config: TextureReplacementConfig) {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            tex_sys.update_config(config);
         }
     }
 

@@ -18,6 +18,10 @@ wasm-logger = "0.2"
 bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
+sha2 = "0.10"
+image = "0.24"
+flate2 = "1.0"
+zip = "0.6"
 
 [dependencies.web-sys]
 version = "0.3"
