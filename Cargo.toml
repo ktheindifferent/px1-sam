@@ -44,3 +44,6 @@ features = [
 [profile.release]
 opt-level = "s"
 lto = true
+
+[package.metadata.wasm-pack]
+wasm-opt = false
