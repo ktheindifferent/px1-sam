@@ -1,11 +1,18 @@
 mod commands;
 mod fifo;
 mod rasterizer;
+mod error_handler;
+mod debug_overlay;
+
+#[cfg(test)]
+mod error_handler_tests;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
 use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
+use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
+use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 
 const GPUSYNC: sync::SyncToken = sync::SyncToken::Gpu;
 
@@ -87,6 +94,8 @@ pub struct Gpu {
     display_off: bool,
     /// Next word returned by the GPUREAD command
     read_word: u32,
+    /// Debug overlay for error visualization
+    debug_overlay: DebugOverlay,
 }
 
 impl Gpu {
@@ -133,6 +142,7 @@ impl Gpu {
             mask_settings: MaskSettings::new(),
             display_off: true,
             read_word: 0,
+            debug_overlay: DebugOverlay::new(),
         };
 
         gpu.refresh_lines_per_field();
@@ -166,6 +176,30 @@ impl Gpu {
     /// 0 = 1x (native), 1 = 2x, 2 = 4x, etc.
     pub fn set_upscale_shift(&mut self, shift: u8) {
         self.set_rasterizer_option(RasterizerOption::UpscaleShift(shift));
+    }
+    
+    /// Enable or disable the debug overlay
+    pub fn set_debug_overlay_enabled(&mut self, enabled: bool) {
+        self.debug_overlay.set_enabled(enabled);
+    }
+    
+    /// Get debug overlay configuration
+    pub fn debug_overlay_config(&self) -> &DebugOverlayConfig {
+        self.debug_overlay.config()
+    }
+    
+    /// Set debug overlay configuration
+    pub fn set_debug_overlay_config(&mut self, config: DebugOverlayConfig) {
+        self.debug_overlay.set_config(config);
+    }
+    
+    /// Update debug overlay with current statistics
+    fn update_debug_overlay(&mut self) {
+        if let Ok(handler) = error_handler::GPU_ERROR_HANDLER.lock() {
+            let stats = handler.get_stats();
+            let recent_errors = handler.get_recent_errors(10);
+            self.debug_overlay.update(stats, &recent_errors);
+        }
     }
 
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer
@@ -625,6 +659,9 @@ fn handle_eol(psx: &mut Psx) {
 
 /// Called when a frame is done rendering and should be displayed
 fn draw_frame(psx: &mut Psx) {
+    // Update debug overlay before sending frame
+    psx.gpu.update_debug_overlay();
+    
     psx.gpu.rasterizer.end_of_frame();
     psx.gpu.frame_drawn = true;
     psx.frame_done = true;
@@ -838,8 +875,25 @@ fn run_next_command(psx: &mut Psx) {
         psx.gpu.draw_time(2);
     }
 
-    // Invoke the callback to actually implement the command
+    // Invoke the callback to actually implement the command with error handling
+    execute_command_with_error_handling(psx, command);
+}
+
+/// Execute a GPU command with proper error handling
+fn execute_command_with_error_handling(psx: &mut Psx, command: &'static Command) {
+    // Store original state for potential recovery
+    let opcode = psx.gpu.command_fifo.peek() >> 24;
+    
+    // Try to execute the command
     (command.handler)(psx);
+    
+    // Update error handler frame counter if needed
+    if let Ok(mut handler) = error_handler::GPU_ERROR_HANDLER.try_lock() {
+        // Check if we're at frame boundary
+        if psx.gpu.frame_drawn {
+            handler.next_frame();
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
