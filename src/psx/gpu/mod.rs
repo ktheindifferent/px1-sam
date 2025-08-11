@@ -4,14 +4,19 @@ mod rasterizer;
 mod error_handler;
 mod debug_overlay;
 pub mod texture_cache;
+mod rendering_pipeline;
+mod enhanced_rasterizer;
 
 #[cfg(test)]
 mod error_handler_tests;
+#[cfg(test)]
+mod rendering_test;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
 use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
+pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 
@@ -100,6 +105,8 @@ pub struct Gpu {
     read_word: u32,
     /// Debug overlay for error visualization
     debug_overlay: DebugOverlay,
+    /// Hardware-accurate rendering pipeline
+    rendering_pipeline: RenderingPipeline,
 }
 
 impl Gpu {
@@ -147,6 +154,7 @@ impl Gpu {
             display_off: true,
             read_word: 0,
             debug_overlay: DebugOverlay::new(),
+            rendering_pipeline: RenderingPipeline::new(),
         };
 
         gpu.refresh_lines_per_field();
@@ -204,6 +212,35 @@ impl Gpu {
             let recent_errors = handler.get_recent_errors(10);
             self.debug_overlay.update(stats, &recent_errors);
         }
+    }
+    
+    /// Set rendering pipeline mode (Enhanced/Original)
+    pub fn set_rendering_mode(&mut self, mode: RenderingMode) {
+        self.rendering_pipeline.set_mode(mode);
+        // Notify rasterizer of mode change
+        let enhanced_24bit = mode == RenderingMode::Enhanced;
+        self.set_rasterizer_option(RasterizerOption::Draw24Bpp(enhanced_24bit));
+        self.set_rasterizer_option(RasterizerOption::DitherForceDisable(enhanced_24bit));
+    }
+    
+    /// Get current rendering mode
+    pub fn rendering_mode(&self) -> RenderingMode {
+        self.rendering_pipeline.mode()
+    }
+    
+    /// Enable/disable sub-pixel precision
+    pub fn set_subpixel_precision(&mut self, enabled: bool) {
+        self.rendering_pipeline.set_subpixel_precision(enabled);
+    }
+    
+    /// Enable/disable perspective correction
+    pub fn set_perspective_correction(&mut self, enabled: bool) {
+        self.rendering_pipeline.set_perspective_correction(enabled);
+    }
+    
+    /// Enable/disable color banding reproduction
+    pub fn set_color_banding(&mut self, enabled: bool) {
+        self.rendering_pipeline.set_color_banding(enabled);
     }
 
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer

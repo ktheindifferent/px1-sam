@@ -241,6 +241,10 @@ pub enum RasterizerOption {
     Wireframe(bool),
     DrawPolygons(bool),
     UpscaleShift(u8),
+    RenderingMode(crate::psx::gpu::rendering_pipeline::RenderingMode),
+    PerspectiveCorrection(bool),
+    SubPixelPrecision(bool),
+    ColorBanding(bool),
 }
 
 /// Buffer containing one rendered frame
