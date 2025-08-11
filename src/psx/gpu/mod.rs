@@ -162,6 +162,12 @@ impl Gpu {
         self.rasterizer.set_option(opt)
     }
 
+    /// Set the internal resolution upscaling factor
+    /// 0 = 1x (native), 1 = 2x, 2 = 4x, etc.
+    pub fn set_upscale_shift(&mut self, shift: u8) {
+        self.set_rasterizer_option(RasterizerOption::UpscaleShift(shift));
+    }
+
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer
     /// as a side effect.
     fn command_pop_to_rasterizer(&mut self) -> u32 {

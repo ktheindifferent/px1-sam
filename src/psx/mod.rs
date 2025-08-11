@@ -220,6 +220,12 @@ impl Psx {
         spu::clear_samples(self)
     }
 
+    /// Set the internal resolution upscaling factor
+    /// 0 = 1x (native), 1 = 2x, 2 = 4x, etc.
+    pub fn set_upscale_shift(&mut self, shift: u8) {
+        self.gpu.set_upscale_shift(shift);
+    }
+
     /// Enable or disable SPU reverb
     pub fn set_spu_reverb_enable(&mut self, enable: bool) {
         self.spu.set_reverb_enable(enable);
