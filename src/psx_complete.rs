@@ -983,7 +983,7 @@ pub enum Gp0Command {
 
 impl Gpu {
     pub fn new() -> Self {
-        Gpu {
+        let mut gpu = Gpu {
             vram: vec![0; VRAM_SIZE],
             display_mode: 0,
             display_x: 0,
@@ -1011,7 +1011,17 @@ impl Gpu {
             gp0_words_remaining: 0,
             gp0_buffer: Vec::new(),
             dma_direction: DmaDirection::Off,
-        }
+        };
+        
+        // Initialize with a simple test pattern to verify rendering
+        // This avoids the gradient test pattern and shows actual rendering
+        gpu.fill_rect(10, 10, 100, 50, 0x00ff00);   // Green rectangle
+        gpu.fill_rect(120, 10, 100, 50, 0xff0000);  // Blue rectangle  
+        gpu.fill_rect(230, 10, 100, 50, 0x0000ff);  // Red rectangle
+        gpu.fill_rect(10, 70, 320, 20, 0xffffff);   // White bar
+        gpu.fill_rect(10, 100, 320, 20, 0x808080);  // Gray bar
+        
+        gpu
     }
     
     pub fn gp0_write(&mut self, val: u32) {
@@ -1821,7 +1831,101 @@ impl Psx {
     }
     
     fn do_dma(&mut self, channel: usize) {
-        // Simplified DMA - just clear active bit
+        let control = self.dma.channel(channel).control();
+        let sync_mode = (control >> 9) & 3;
+        let from_ram = (control & 1) == 0;
+        
+        // Channel 2 is GPU
+        if channel == 2 {
+            if from_ram {
+                // DMA from RAM to GPU (most common for drawing)
+                let base = self.dma.channel(channel).base() & 0x1fffff;
+                let mut addr = base;
+                
+                match sync_mode {
+                    0 => {
+                        // Manual mode - transfer block_control words
+                        let block_control = self.dma.channel(channel).block_control();
+                        let count = block_control & 0xffff;
+                        for _ in 0..count.min(0x10000) {
+                            if (addr as usize) < self.ram.len() - 3 {
+                                let word = u32::from_le_bytes([
+                                    self.ram[addr as usize],
+                                    self.ram[(addr + 1) as usize],
+                                    self.ram[(addr + 2) as usize],
+                                    self.ram[(addr + 3) as usize],
+                                ]);
+                                self.gpu.gp0_write(word);
+                            }
+                            addr = addr.wrapping_add(4) & 0x1fffff;
+                        }
+                    }
+                    1 => {
+                        // Request mode - transfer blocks
+                        let block_control = self.dma.channel(channel).block_control();
+                        let block_size = block_control & 0xffff;
+                        let block_count = (block_control >> 16) & 0xffff;
+                        
+                        for _ in 0..block_count.min(0x1000) {
+                            for _ in 0..block_size.min(0x1000) {
+                                if (addr as usize) < self.ram.len() - 3 {
+                                    let word = u32::from_le_bytes([
+                                        self.ram[addr as usize],
+                                        self.ram[(addr + 1) as usize],
+                                        self.ram[(addr + 2) as usize],
+                                        self.ram[(addr + 3) as usize],
+                                    ]);
+                                    self.gpu.gp0_write(word);
+                                }
+                                addr = addr.wrapping_add(4) & 0x1fffff;
+                            }
+                        }
+                    }
+                    2 => {
+                        // Linked list mode - used for GPU command lists
+                        let mut current = base;
+                        let mut count = 0;
+                        
+                        while current != 0xffffff && count < 0x10000 {
+                            if (current as usize) < self.ram.len() - 3 {
+                                // Read header
+                                let header = u32::from_le_bytes([
+                                    self.ram[current as usize],
+                                    self.ram[(current + 1) as usize],
+                                    self.ram[(current + 2) as usize],
+                                    self.ram[(current + 3) as usize],
+                                ]);
+                                
+                                let next = header & 0xffffff;
+                                let size = (header >> 24) & 0xff;
+                                
+                                // Send command words
+                                for i in 1..=size {
+                                    let word_addr = (current + i * 4) & 0x1fffff;
+                                    if (word_addr as usize) < self.ram.len() - 3 {
+                                        let word = u32::from_le_bytes([
+                                            self.ram[word_addr as usize],
+                                            self.ram[(word_addr + 1) as usize],
+                                            self.ram[(word_addr + 2) as usize],
+                                            self.ram[(word_addr + 3) as usize],
+                                        ]);
+                                        self.gpu.gp0_write(word);
+                                    }
+                                }
+                                
+                                current = next;
+                            } else {
+                                break;
+                            }
+                            count += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Clear active bit after transfer
         let control = self.dma.channel(channel).control() & !0x01000000;
         self.dma.channel_mut(channel).set_control(control);
         
