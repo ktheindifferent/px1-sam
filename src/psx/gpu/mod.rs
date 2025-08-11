@@ -1,6 +1,7 @@
 mod commands;
 mod fifo;
 mod rasterizer;
+pub mod texture_cache;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};

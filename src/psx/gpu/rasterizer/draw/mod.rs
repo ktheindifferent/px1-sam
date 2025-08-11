@@ -10,6 +10,7 @@ use crate::psx::gpu::commands::{vram_access_dimensions, Shaded};
 use crate::psx::gpu::commands::{NoShading, Position, Transparent};
 use crate::psx::gpu::commands::{NoTexture, Opaque, ShadingMode, TextureBlending, TextureRaw};
 use crate::psx::gpu::commands::{TextureMode, TransparencyMode};
+use crate::psx::gpu::texture_cache::GpuCache;
 use crate::VRamDisplayMode;
 
 use crate::psx::gpu::{DisplayMode, DrawMode, MaskSettings, TextureWindow, TransparencyFunction};
@@ -102,6 +103,9 @@ pub struct Rasterizer {
     draw_wireframe: bool,
     /// If false we don't draw triangles or quads
     draw_polygons: bool,
+    /// Enhanced texture and CLUT cache
+    #[serde(skip)]
+    gpu_cache: GpuCache,
 }
 
 impl Rasterizer {
@@ -135,6 +139,7 @@ impl Rasterizer {
             display_bottom_field: false,
             draw_wireframe: false,
             draw_polygons: true,
+            gpu_cache: GpuCache::new(),
         }
     }
 
@@ -167,6 +172,9 @@ impl Rasterizer {
     ) {
         self.rebuild_dither_table();
         self.new_frame();
+        
+        // Counter for periodic cache statistics reporting
+        let mut frame_counter = 0u32;
 
         loop {
             let commands = command_channel.recv().unwrap();
@@ -219,6 +227,8 @@ impl Rasterizer {
                                             y,
                                             self.mask_settings.mask(p),
                                         );
+                                        // Invalidate cache for this pixel
+                                        self.gpu_cache.invalidate_region(x, y, 1, 1);
                                     }
 
                                     if store.next().is_none() {
@@ -263,6 +273,19 @@ impl Rasterizer {
                     Command::EndOfFrame => {
                         let frame = self.new_frame();
                         frame_channel.send(frame).unwrap();
+                        
+                        // Log cache statistics periodically (every 60 frames)
+                        frame_counter += 1;
+                        if frame_counter % 60 == 0 {
+                            if log::log_enabled!(log::Level::Debug) {
+                                let tex_stats = self.gpu_cache.texture_cache.statistics();
+                                let clut_stats = self.gpu_cache.clut_cache.statistics();
+                                log::debug!("Texture Cache - Hit rate: {:.1}%, Hits: {}, Misses: {}", 
+                                    tex_stats.hit_rate() * 100.0, tex_stats.hits, tex_stats.misses);
+                                log::debug!("CLUT Cache - Hit rate: {:.1}%, Hits: {}, Misses: {}", 
+                                    clut_stats.hit_rate() * 100.0, clut_stats.hits, clut_stats.misses);
+                            }
+                        }
                     }
                     Command::FieldChanged(f) => self.display_bottom_field = *f,
                     Command::Option(opt) => self.set_option(*opt),
@@ -1355,7 +1378,7 @@ impl Rasterizer {
     }
 
     fn get_texel(&mut self, u: u8, v: u8) -> Pixel {
-        self.tex_mapper.get_texel(u, v, &self.vram)
+        self.tex_mapper.get_texel(u, v, &self.vram, &mut self.gpu_cache)
     }
 
     fn blend(&self, texel: Pixel, color: Pixel) -> Pixel {
@@ -1793,7 +1816,7 @@ impl TextureMapper {
         self.v_offset += tp_y;
     }
 
-    pub fn get_texel(&mut self, u: u8, v: u8, vram: &VRam) -> Pixel {
+    pub fn get_texel(&mut self, u: u8, v: u8, vram: &VRam, gpu_cache: &mut GpuCache) -> Pixel {
         let pts = u16::from(self.pixel_to_texel_shift);
         let fb_u = u16::from(u & self.u_mask) + self.u_offset;
         let fb_v = u16::from(v & self.v_mask) + self.v_offset;
@@ -2495,6 +2518,12 @@ fn cmd_vram_copy(rasterizer: &mut Rasterizer, params: &[u32]) {
     // From mednafen, is it because it's used as a temporary buffer for the copy? Is there a
     // different buffer?
     rasterizer.tex_mapper.cache_invalidate();
+    
+    // Invalidate the enhanced cache for the destination region
+    let dst_x_native = (dst & 0x3ff) as u16;
+    let dst_y_native = ((dst >> 16) & 0x3ff) as u16;
+    let (width_native, height_native) = vram_access_dimensions(dim, true);
+    rasterizer.gpu_cache.invalidate_region(dst_x_native, dst_y_native, width_native as u16, height_native as u16);
 
     let xmask = (0x400 << rasterizer.vram.upscale_shift) - 1;
     let ymask = (0x200 << rasterizer.vram.upscale_shift) - 1;
@@ -2537,6 +2566,9 @@ fn cmd_vram_store(rasterizer: &mut Rasterizer, params: &[u32]) {
     let (width, height) = vram_access_dimensions(dim, false);
 
     rasterizer.tex_mapper.cache_invalidate();
+    
+    // Invalidate the enhanced cache for the store region
+    rasterizer.gpu_cache.invalidate_region(left, top, width as u16, height as u16);
 
     let store = VRamStore::new(left, top, width as u16, height as u16);
 
@@ -2578,6 +2610,9 @@ fn cmd_fill_rect(rasterizer: &mut Rasterizer, params: &[u32]) {
 
     // XXX Pretty sure there's no dithering for this commands
     let color = rasterizer.truncate_color(color);
+
+    // Invalidate cache for the fill area
+    rasterizer.gpu_cache.invalidate_region(start_x, start_y, width, height);
 
     for y in 0..height {
         let y_pos = (start_y + y) & 511;
