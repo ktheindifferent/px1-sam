@@ -7,6 +7,18 @@ edition = "2021"
 crate-type = ["cdylib"]
 path = "src/wasm_unified.rs"
 
+[[bin]]
+name = "replay-harness"
+path = "src/bin/replay-harness.rs"
+
+[[bin]]
+name = "visual-test"
+path = "src/bin/visual-test.rs"
+
+[[bin]]
+name = "save-state-test"
+path = "src/bin/save-state-test.rs"
+
 [features]
 default = []
 pgxp = []
@@ -37,6 +49,10 @@ sha2 = "0.10"
 hex = "0.4"
 bincode = "1.3"
 num_cpus = "1.16"
+
+# Testing dependencies
+toml = "0.8"
+backtrace = "0.3"
 
 # Vulkan dependencies
 ash = { version = "0.37", optional = true }
