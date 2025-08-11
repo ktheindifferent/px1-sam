@@ -19,6 +19,8 @@ macro_rules! disc_log {
 }
 
 mod cache;
+pub mod advanced_cache;
+pub mod advanced_cache_wasm;
 
 /// PlayStation disc.
 ///
