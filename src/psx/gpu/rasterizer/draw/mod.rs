@@ -102,6 +102,10 @@ pub struct Rasterizer {
     draw_wireframe: bool,
     /// If false we don't draw triangles or quads
     draw_polygons: bool,
+    /// Palette location for 4bpp indexed mode (x, y coordinates in VRAM)
+    palette_4bpp_location: (u16, u16),
+    /// Palette location for 8bpp indexed mode (x, y coordinates in VRAM)
+    palette_8bpp_location: (u16, u16),
 }
 
 impl Rasterizer {
@@ -135,6 +139,8 @@ impl Rasterizer {
             display_bottom_field: false,
             draw_wireframe: false,
             draw_polygons: true,
+            palette_4bpp_location: (0, 496), // Default 4bpp palette location
+            palette_8bpp_location: (0, 480), // Default 8bpp palette location
         }
     }
 
@@ -399,7 +405,49 @@ impl Rasterizer {
 
         let width = min(self.cur_frame.width, xres);
 
-        if self.display_mode.output_24bpp() {
+        if self.display_mode.is_4bpp_mode() {
+            // 4bpp indexed color mode for display output
+            for y in 0..(1i32 << self.vram.upscale_shift) {
+                for x in 0..width {
+                    // Each pixel in VRAM contains 4 palette indices
+                    let vram_x = (x_start + (x >> 2)) as i32;
+                    let pixel_data = self.read_pixel(vram_x, vram_y + y).to_mbgr1555();
+                    
+                    let nibbles = [
+                        (pixel_data & 0xf) as u16,
+                        ((pixel_data >> 4) & 0xf) as u16,
+                        ((pixel_data >> 8) & 0xf) as u16,
+                        ((pixel_data >> 12) & 0xf) as u16,
+                    ];
+                    
+                    let palette_index = nibbles[((x as usize) & 3)];
+                    let (palette_base_x, palette_base_y) = self.palette_4bpp_location;
+                    let palette_x = ((palette_base_x + palette_index) & 0x3ff) as i32;
+                    let palette_y = (palette_base_y & 0x1ff) as i32;
+                    
+                    let color = self.read_pixel(palette_x, palette_y);
+                    self.cur_frame.set_pixel(x, frame_y + (y as u32), color.to_rgb888());
+                }
+            }
+        } else if self.display_mode.is_8bpp_mode() {
+            // 8bpp indexed color mode for display output
+            for y in 0..(1i32 << self.vram.upscale_shift) {
+                for x in 0..width {
+                    // Each pixel in VRAM contains 2 palette indices
+                    let vram_x = (x_start + (x >> 1)) as i32;
+                    let pixel_data = self.read_pixel(vram_x, vram_y + y);
+                    let bytes = pixel_data.vram_bytes();
+                    
+                    let palette_index = bytes[((x as usize) & 1)] as u16;
+                    let (palette_base_x, palette_base_y) = self.palette_8bpp_location;
+                    let palette_x = ((palette_base_x + palette_index) & 0x3ff) as i32;
+                    let palette_y = (palette_base_y & 0x1ff) as i32;
+                    
+                    let color = self.read_pixel(palette_x, palette_y);
+                    self.cur_frame.set_pixel(x, frame_y + (y as u32), color.to_rgb888());
+                }
+            }
+        } else if self.display_mode.output_24bpp() {
             // GPU is in 24bpp mode, we need to do some bitwise magic to recreate the values
             // correctly
 
@@ -471,6 +519,18 @@ impl Rasterizer {
             0x08 => self.display_mode.set(val & 0xff_ffff),
             // Get info
             0x10 => (),
+            // Set 4bpp palette location (custom extension for indexed modes)
+            0x11 => {
+                let x = (val & 0x3ff) as u16;
+                let y = ((val >> 10) & 0x1ff) as u16;
+                self.palette_4bpp_location = (x, y);
+            }
+            // Set 8bpp palette location (custom extension for indexed modes)
+            0x12 => {
+                let x = (val & 0x3ff) as u16;
+                let y = ((val >> 10) & 0x1ff) as u16;
+                self.palette_8bpp_location = (x, y);
+            }
             _ => warn!("Unimplemented GP1 {:x}", val),
         }
     }
@@ -518,25 +578,40 @@ impl Rasterizer {
                                     self.vram.native_pixel(x, y).to_rgb888()
                                 }
                                 VRamDisplayMode::Full8bpp => {
-                                    let p = self.vram.native_pixel(x >> 1, y).vram_bytes();
-
-                                    let g = p[usize::from(x & 1)];
-
-                                    Pixel::from_rgb(g, g, g).0
+                                    // 8bpp indexed color mode
+                                    // Each VRAM pixel contains 2 palette indices
+                                    let vram_pixel = self.vram.native_pixel(x >> 1, y);
+                                    let bytes = vram_pixel.vram_bytes();
+                                    let palette_index = bytes[usize::from(x & 1)] as u16;
+                                    
+                                    // Get palette from VRAM using configured location
+                                    let (palette_base_x, palette_base_y) = self.palette_8bpp_location;
+                                    let palette_x = (palette_base_x + palette_index) & 0x3ff;
+                                    let palette_y = palette_base_y & 0x1ff;
+                                    
+                                    let color_pixel = self.vram.native_pixel(palette_x, palette_y);
+                                    color_pixel.to_rgb888()
                                 }
                                 VRamDisplayMode::Full4bpp => {
-                                    let p = self.vram.native_pixel(x >> 2, y).to_mbgr1555();
-                                    let n = [
-                                        (p & 0xf) as u8,
-                                        ((p >> 4) & 0xf) as u8,
-                                        ((p >> 8) & 0xf) as u8,
-                                        ((p >> 12) & 0xf) as u8,
+                                    // 4bpp indexed color mode
+                                    // Each VRAM pixel contains 4 palette indices
+                                    let vram_pixel = self.vram.native_pixel(x >> 2, y).to_mbgr1555();
+                                    let nibbles = [
+                                        (vram_pixel & 0xf) as u16,
+                                        ((vram_pixel >> 4) & 0xf) as u16,
+                                        ((vram_pixel >> 8) & 0xf) as u16,
+                                        ((vram_pixel >> 12) & 0xf) as u16,
                                     ];
-
-                                    let g = n[usize::from(x & 3)];
-                                    let g = g | g << 4;
-
-                                    Pixel::from_rgb(g, g, g).0
+                                    
+                                    let palette_index = nibbles[usize::from(x & 3)];
+                                    
+                                    // Get palette from VRAM using configured location
+                                    let (palette_base_x, palette_base_y) = self.palette_4bpp_location;
+                                    let palette_x = (palette_base_x + palette_index) & 0x3ff;
+                                    let palette_y = palette_base_y & 0x1ff;
+                                    
+                                    let color_pixel = self.vram.native_pixel(palette_x, palette_y);
+                                    color_pixel.to_rgb888()
                                 }
                             };
                         }

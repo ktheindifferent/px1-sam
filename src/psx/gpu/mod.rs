@@ -751,6 +751,11 @@ fn gp1(psx: &mut Psx, val: u32) {
         }
         0x08 => psx.gpu.display_mode.set(val & 0xff_ffff),
         0x10 => psx.gpu.gp1_get_info(val),
+        // Extended GP1 commands for indexed display modes - pass through to rasterizer
+        0x11 | 0x12 => {
+            // These commands are handled by the rasterizer for palette configuration
+            // The main GPU doesn't need to do anything special with them
+        }
         _ => unimplemented!("GP1 0x{:08x}", val),
     }
 }
@@ -1060,6 +1065,24 @@ impl DisplayMode {
     /// True if we output 24 bits per pixel
     fn output_24bpp(self) -> bool {
         self.0 & (1 << 4) != 0
+    }
+    
+    /// Check if we're in 4bpp indexed display mode
+    /// This is typically used for FMVs and special effects
+    fn is_4bpp_mode(self) -> bool {
+        // 4bpp mode is typically indicated by specific bit patterns
+        // Often used when bits indicate special indexed modes
+        // This needs to be verified against actual hardware behavior
+        (self.0 & 0x80) != 0 && (self.0 & 0x40) == 0
+    }
+    
+    /// Check if we're in 8bpp indexed display mode
+    /// This is typically used for FMVs and special effects
+    fn is_8bpp_mode(self) -> bool {
+        // 8bpp mode is typically indicated by specific bit patterns
+        // Often used when bits indicate special indexed modes
+        // This needs to be verified against actual hardware behavior
+        (self.0 & 0x80) != 0 && (self.0 & 0x40) != 0
     }
 }
 
