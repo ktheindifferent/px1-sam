@@ -335,16 +335,16 @@ impl Rasterizer {
         self.clip_x_min >>= self.vram.upscale_shift;
         self.clip_y_min >>= self.vram.upscale_shift;
         self.clip_x_max >>= self.vram.upscale_shift;
-        self.clip_x_max >>= self.vram.upscale_shift;
+        self.clip_y_max >>= self.vram.upscale_shift;
 
         self.clip_x_min <<= upscale_shift;
         self.clip_y_min <<= upscale_shift;
         self.clip_x_max <<= upscale_shift;
-        self.clip_x_max <<= upscale_shift;
+        self.clip_y_max <<= upscale_shift;
 
         // The clip is inclusive, so we need to offset when upscaling
-        self.clip_x_max += (1 << self.vram.upscale_shift) - 1;
-        self.clip_y_max += (1 << self.vram.upscale_shift) - 1;
+        self.clip_x_max += (1 << upscale_shift) - 1;
+        self.clip_y_max += (1 << upscale_shift) - 1;
 
         let mut vram = VRam::with_upscale_shift(upscale_shift);
 

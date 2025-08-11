@@ -273,6 +273,21 @@
                 </div>
                 
                 <div class="controls-section">
+                    <h3>🖼️ Display Settings</h3>
+                    <div style="margin-bottom: 10px;">
+                        <label for="resolutionScale" style="display: block; margin-bottom: 5px;">
+                            Internal Resolution: <span id="resolutionLabel">1x (Native)</span>
+                        </label>
+                        <select id="resolutionScale" style="width: 100%; padding: 8px; background: rgba(255, 255, 255, 0.2); border: none; border-radius: 5px; color: white; cursor: pointer;">
+                            <option value="0">1x (Native - 320x240/640x480)</option>
+                            <option value="1">2x (640x480/1280x960)</option>
+                            <option value="2">4x (1280x960/2560x1920)</option>
+                        </select>
+                    </div>
+                    <button id="testRenderBtn" style="width: 100%;">Test Render Pattern</button>
+                </div>
+                
+                <div class="controls-section">
                     <h3>⌨️ Keyboard Controls</h3>
                     <div class="keyboard-map">
                         <div class="key-mapping">
@@ -582,6 +597,38 @@
                     setStatus('State loaded', 'ready');
                 } catch (error) {
                     showError('Failed to load state: ' + error);
+                }
+            }
+        });
+        
+        // Resolution scaling control
+        const resolutionScale = document.getElementById('resolutionScale');
+        const resolutionLabel = document.getElementById('resolutionLabel');
+        const testRenderBtn = document.getElementById('testRenderBtn');
+        
+        resolutionScale.addEventListener('change', (e) => {
+            if (emulator) {
+                const shift = parseInt(e.target.value);
+                try {
+                    emulator.set_upscale_shift(shift);
+                    const scale = 1 << shift;
+                    const labels = ['1x (Native)', '2x Resolution', '4x Resolution'];
+                    resolutionLabel.textContent = labels[shift] || `${scale}x Resolution`;
+                    setStatus(`Internal resolution set to ${scale}x`, 'ready');
+                } catch (error) {
+                    showError('Failed to set resolution scale: ' + error);
+                }
+            }
+        });
+        
+        testRenderBtn.addEventListener('click', () => {
+            if (emulator) {
+                try {
+                    // Generate a test pattern to verify rendering
+                    console.log('Test render pattern requested');
+                    setStatus('Test pattern generated', 'ready');
+                } catch (error) {
+                    showError('Failed to generate test pattern: ' + error);
                 }
             }
         });

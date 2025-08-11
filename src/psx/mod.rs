@@ -219,6 +219,12 @@ impl Psx {
         spu::clear_samples(self)
     }
 
+    /// Set the internal resolution upscaling factor
+    /// 0 = 1x (native), 1 = 2x, 2 = 4x, etc.
+    pub fn set_upscale_shift(&mut self, shift: u8) {
+        self.gpu.set_upscale_shift(shift);
+    }
+
     /// Advance the CPU cycle counter by the given number of ticks
     fn tick(&mut self, cycles: CycleCount) {
         self.cycle_counter += cycles;

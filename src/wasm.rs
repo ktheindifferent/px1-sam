@@ -265,4 +265,13 @@ impl PsxEmulator {
         self.psx.deserialize_state(state_data)
             .map_err(|e| JsValue::from_str(&format!("Failed to load save state: {:?}", e)))
     }
+
+    /// Set the internal resolution upscaling factor
+    /// 0 = 1x (native 320x240/640x480)
+    /// 1 = 2x resolution
+    /// 2 = 4x resolution
+    pub fn set_upscale_shift(&mut self, shift: u8) {
+        self.psx.set_upscale_shift(shift);
+        console_log!("Internal resolution upscaling set to {}x", 1 << shift);
+    }
 }
