@@ -331,7 +331,18 @@ impl Psx {
         self.tick(self.dma_timing_penalty);
 
         if let Some(offset) = map::RAM.contains(abs_addr) {
-            self.tick(3);
+            // During DMA, CPU can still access RAM but with increased latency
+            let access_penalty = if self.cpu_stalled_for_dma {
+                // CPU is stalled, this shouldn't happen
+                0
+            } else if self.dma_timing_penalty > 0 {
+                // DMA is active, RAM access is slower
+                5
+            } else {
+                // Normal RAM access
+                3
+            };
+            self.tick(access_penalty);
             return self.xmem.ram_load(offset);
         }
 
@@ -409,6 +420,13 @@ impl Psx {
             // So any code that does "load IRQ register address -> load IRQ register" in sequence
             // will have 1f80 in the high bits, so it's a sane default.
             return Addressable::from_u32(v | 0x1f80_0000);
+        }
+
+        if let Some(offset) = map::SCRATCH_PAD.contains(abs_addr) {
+            // Scratchpad can be accessed during DMA without penalty
+            // This is crucial for games that use scratchpad for critical data during DMA
+            self.tick(1);
+            return self.scratch_pad.load(offset);
         }
 
         if let Some(offset) = map::EXPANSION_1.contains(abs_addr) {
