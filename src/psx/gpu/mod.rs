@@ -7,6 +7,9 @@ pub mod texture_cache;
 mod rendering_pipeline;
 mod enhanced_rasterizer;
 
+#[cfg(feature = "vulkan-renderer")]
+pub mod vulkan_renderer;
+
 #[cfg(test)]
 mod error_handler_tests;
 #[cfg(test)]
