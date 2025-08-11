@@ -55,6 +55,10 @@ mod debugger;
 mod psx;
 mod retrolog;
 mod sha;
+#[cfg(feature = "compatibility-db")]
+pub mod compatibility;
+#[cfg(feature = "compatibility-db")]
+mod compatibility_integration;
 
 use crate::sha::sha256;
 use box_array::BoxArray;

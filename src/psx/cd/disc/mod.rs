@@ -112,6 +112,17 @@ impl Region {
     }
 }
 
+impl fmt::Display for Region {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            Region::Japan => "Japan",
+            Region::NorthAmerica => "NorthAmerica",
+            Region::Europe => "Europe",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 /// Disc serial number
 #[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq)]
 pub struct SerialNumber([u8; 10]);
@@ -169,6 +180,12 @@ impl SerialNumber {
 impl fmt::Display for SerialNumber {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl ToString for SerialNumber {
+    fn to_string(&self) -> String {
+        String::from_utf8_lossy(&self.0).to_string()
     }
 }
 

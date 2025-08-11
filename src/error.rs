@@ -37,4 +37,10 @@ pub enum PsxError {
     NoCdcFirmwareFound,
     #[error("Deserialization error: {0}")]
     DeserializationError(String),
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+    #[error("Network error: {0}")]
+    NetworkError(String),
+    #[error("Emulation error: {0}")]
+    EmulationError(String),
 }
