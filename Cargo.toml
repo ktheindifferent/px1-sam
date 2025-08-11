@@ -23,6 +23,7 @@ chrono = { version = "0.4", features = ["serde"], optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
 reqwest = { version = "0.11", features = ["json"], optional = true }
 tokio = { version = "1", features = ["rt", "macros"], optional = true }
+flexbuffers = "25.2.10"
 
 [dependencies.web-sys]
 version = "0.3"
