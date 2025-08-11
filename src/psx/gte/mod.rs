@@ -5,6 +5,10 @@ use std::{i16, u16};
 
 mod divider;
 
+// PGXP support
+#[cfg(feature = "pgxp")]
+use crate::psx::pgxp::{PgxpCoord, vertex_cache::PgxpVertex};
+
 #[cfg(test)]
 mod tests;
 
@@ -62,6 +66,21 @@ pub struct Gte {
     /// 3D-intensive games
     #[serde(default)]
     overclock: bool,
+    
+    /// PGXP high-precision vertex tracking
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pgxp_vertices: [PgxpVertex; 4],
+    
+    /// PGXP high-precision MAC values
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pgxp_mac: [PgxpCoord; 4],
+    
+    /// PGXP enabled flag
+    #[cfg(feature = "pgxp")]
+    #[serde(default)]
+    pgxp_enabled: bool,
 }
 
 impl Gte {
@@ -92,7 +111,18 @@ impl Gte {
             lzcr: 32,
             reg_23: 0,
             overclock: false,
+            #[cfg(feature = "pgxp")]
+            pgxp_vertices: [PgxpVertex::new(); 4],
+            #[cfg(feature = "pgxp")]
+            pgxp_mac: [PgxpCoord::new(); 4],
+            #[cfg(feature = "pgxp")]
+            pgxp_enabled: false,
         }
+    }
+    
+    #[cfg(feature = "pgxp")]
+    pub fn set_pgxp_enabled(&mut self, enabled: bool) {
+        self.pgxp_enabled = enabled;
     }
 
     pub fn set_overclock(&mut self, overclock: bool) {
@@ -1226,6 +1256,12 @@ impl Gte {
     /// Rotate, Translate and Perspective transform a single vector Returns the projection factor
     /// that's also used for depth queuing
     fn do_rtp(&mut self, config: CommandConfig, vector_index: usize) -> u32 {
+        #[cfg(feature = "pgxp")]
+        let pgxp_backup = if self.pgxp_enabled {
+            Some(self.do_rtp_pgxp(config, vector_index))
+        } else {
+            None
+        };
         // The computed Z coordinate with unconditional 12bit shift applied
         let mut z_shifted: i32 = 0;
 
@@ -1470,6 +1506,80 @@ impl Gte {
             0xffff
         } else {
             value as u16
+        }
+    }
+    
+    /// PGXP-enhanced version of do_rtp with high-precision tracking
+    #[cfg(feature = "pgxp")]
+    fn do_rtp_pgxp(&mut self, config: CommandConfig, vector_index: usize) -> PgxpCoord {
+        // Create high-precision coordinate from input vector
+        let mut pgxp_coord = PgxpCoord::from_values(
+            self.v[vector_index][0] as f32,
+            self.v[vector_index][1] as f32,
+            self.v[vector_index][2] as f32,
+            1.0,
+        );
+        
+        // Step 1: Apply rotation matrix with full precision
+        let rm = Matrix::Rotation.index();
+        let tr = ControlVector::Translation.index();
+        
+        let mut transformed = PgxpCoord::new();
+        
+        for r in 0..3 {
+            let mut res = (self.control_vectors[tr][r] as f64) / 4096.0; // Convert from fixed point
+            
+            for c in 0..3 {
+                let v = match c {
+                    0 => pgxp_coord.x as f64,
+                    1 => pgxp_coord.y as f64,
+                    2 => pgxp_coord.z as f64,
+                    _ => 0.0,
+                };
+                let m = (self.matrices[rm][r][c] as f64) / 4096.0; // Convert from fixed point
+                res += v * m;
+            }
+            
+            match r {
+                0 => transformed.x = res as f32,
+                1 => transformed.y = res as f32,
+                2 => transformed.z = res as f32,
+                _ => {}
+            }
+        }
+        
+        transformed.valid.set_valid();
+        
+        // Step 2: Apply perspective projection with full precision
+        if transformed.z > 0.0 {
+            let projection_factor = (self.h as f32) / transformed.z;
+            
+            // Project with full precision
+            let screen_x = transformed.x * projection_factor + (self.ofx as f32 / 65536.0);
+            let screen_y = transformed.y * projection_factor + (self.ofy as f32 / 65536.0);
+            
+            // Store PGXP vertex with full precision
+            let mut pgxp_vertex = PgxpVertex::new();
+            pgxp_vertex.position = PgxpCoord::from_values(screen_x, screen_y, transformed.z, 1.0);
+            pgxp_vertex.flags = 0x07; // Mark as fully valid
+            
+            // Store in PGXP vertex cache
+            self.pgxp_vertices[3] = pgxp_vertex;
+            self.pgxp_vertices[0] = self.pgxp_vertices[1];
+            self.pgxp_vertices[1] = self.pgxp_vertices[2];
+            self.pgxp_vertices[2] = self.pgxp_vertices[3];
+        }
+        
+        transformed
+    }
+    
+    /// Get PGXP vertex from FIFO
+    #[cfg(feature = "pgxp")]
+    pub fn get_pgxp_vertex(&self, index: usize) -> Option<&PgxpVertex> {
+        if index < 4 && self.pgxp_enabled {
+            Some(&self.pgxp_vertices[index])
+        } else {
+            None
         }
     }
 }

@@ -1,4 +1,6 @@
 mod fixed_point;
+#[cfg(feature = "pgxp")]
+mod pgxp_renderer;
 
 #[cfg(test)]
 mod tests;
@@ -106,6 +108,10 @@ pub struct Rasterizer {
     /// Enhanced texture and CLUT cache
     #[serde(skip)]
     gpu_cache: GpuCache,
+    /// PGXP-enhanced renderer
+    #[cfg(feature = "pgxp")]
+    #[serde(skip)]
+    pgxp_renderer: pgxp_renderer::PgxpRasterizer,
 }
 
 impl Rasterizer {
@@ -140,6 +146,8 @@ impl Rasterizer {
             draw_wireframe: false,
             draw_polygons: true,
             gpu_cache: GpuCache::new(),
+            #[cfg(feature = "pgxp")]
+            pgxp_renderer: pgxp_renderer::PgxpRasterizer::new(),
         }
     }
 
