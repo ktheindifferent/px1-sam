@@ -631,10 +631,10 @@ impl PsxEmulator {
         for i in 0..steps {
             let pc_before = self.psx.cpu.pc;
             
-            match self.psx.cpu.run_next_instruction(&mut self.psx) {
-                Ok(cycles) => {
-                    result.push_str(&format!("  Step {}: PC 0x{:08x} -> 0x{:08x} (cycles: {})\n", 
-                                           i, pc_before, self.psx.cpu.pc, cycles.0));
+            match self.psx.run_next_instruction() {
+                Ok(()) => {
+                    result.push_str(&format!("  Step {}: PC 0x{:08x} -> 0x{:08x}\n", 
+                                           i, pc_before, self.psx.cpu.pc));
                 }
                 Err(e) => {
                     result.push_str(&format!("  Step {}: Error at PC 0x{:08x}: {:?}\n", 
@@ -647,20 +647,20 @@ impl PsxEmulator {
         result
     }
     
-    pub fn debug_check_bios(&self) -> String {
+    pub fn debug_check_bios(&mut self) -> String {
         let mut result = String::new();
         
         // Check if BIOS is loaded
-        let bios_start = self.psx.load::<u32>(0xbfc00000);
-        let bios_magic = self.psx.load::<u32>(0xbfc00004);
+        let bios_start = self.psx.load32(0xbfc00000).unwrap_or(0);
+        let bios_magic = self.psx.load32(0xbfc00004).unwrap_or(0);
         
         result.push_str(&format!("BIOS check:\n"));
         result.push_str(&format!("  First word: 0x{:08x}\n", bios_start));
         result.push_str(&format!("  Second word: 0x{:08x}\n", bios_magic));
         
         // Check for common BIOS entry points
-        let reset_vector = self.psx.load::<u32>(0xbfc00000);
-        let exception_vector = self.psx.load::<u32>(0xbfc00180);
+        let reset_vector = self.psx.load32(0xbfc00000).unwrap_or(0);
+        let exception_vector = self.psx.load32(0xbfc00180).unwrap_or(0);
         
         result.push_str(&format!("  Reset vector (0xbfc00000): 0x{:08x}\n", reset_vector));
         result.push_str(&format!("  Exception vector (0xbfc00180): 0x{:08x}\n", exception_vector));
