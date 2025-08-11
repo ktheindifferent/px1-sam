@@ -3,8 +3,14 @@
 pub mod bios;
 pub mod cd;
 pub mod cop0;
+pub mod cop0_enhanced;
 pub mod cpu;
 pub mod cpu_instructions;
+pub mod cpu_pipeline;
+pub mod cpu_pipeline_integration;
+pub mod cpu_timing;
+#[cfg(test)]
+mod cpu_pipeline_tests;
 #[cfg(feature = "debugger")]
 pub mod debugger;
 mod cache;
