@@ -8,6 +8,7 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod frame_interpolation;
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan_shader;
@@ -33,6 +34,7 @@ pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
