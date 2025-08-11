@@ -994,8 +994,8 @@ impl Gpu {
             display_y2: 0x100,
             draw_x1: 0,
             draw_y1: 0,
-            draw_x2: 0,
-            draw_y2: 0,
+            draw_x2: 1023,
+            draw_y2: 511,
             draw_offset_x: 0,
             draw_offset_y: 0,
             tex_page_x: 0,
@@ -1175,10 +1175,37 @@ impl Gpu {
                     self.tex_page_y = ((val >> 4) & 1) as u8;
                     self.tex_depth = ((val >> 7) & 3) as u8;
                 }
+                Gp0Command::SetDrawArea => {
+                    let val = self.gp0_buffer[0];
+                    let cmd = (val >> 24) as u8;
+                    
+                    if cmd == 0xe3 {
+                        // Set drawing area top left
+                        self.draw_x1 = (val & 0x3ff) as u16;
+                        self.draw_y1 = ((val >> 10) & 0x3ff) as u16;
+                    } else if cmd == 0xe4 {
+                        // Set drawing area bottom right
+                        self.draw_x2 = (val & 0x3ff) as u16;
+                        self.draw_y2 = ((val >> 10) & 0x3ff) as u16;
+                    }
+                }
+                Gp0Command::TextureWindow => {
+                    let val = self.gp0_buffer[0];
+                    self.tex_window_mask_x = (val & 0x1f) as u8;
+                    self.tex_window_mask_y = ((val >> 5) & 0x1f) as u8;
+                    self.tex_window_offset_x = ((val >> 10) & 0x1f) as u8;
+                    self.tex_window_offset_y = ((val >> 15) & 0x1f) as u8;
+                }
                 Gp0Command::SetDrawOffset => {
                     let val = self.gp0_buffer[0];
                     self.draw_offset_x = ((val & 0x7ff) as i16) << 5 >> 5;
                     self.draw_offset_y = (((val >> 11) & 0x7ff) as i16) << 5 >> 5;
+                }
+                Gp0Command::MaskBit => {
+                    let val = self.gp0_buffer[0];
+                    // Bit 0: Set mask while drawing
+                    // Bit 1: Check mask before drawing
+                    self.status = (self.status & !0x1800) | ((val & 3) << 11);
                 }
                 _ => {}
             }
