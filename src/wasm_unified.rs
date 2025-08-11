@@ -20,6 +20,15 @@ mod error;
 #[path = "bitwise.rs"]
 mod bitwise;
 
+#[path = "bios_hle.rs"]
+mod bios_hle;
+
+#[path = "spu.rs"]
+mod spu;
+
+#[path = "cdrom.rs"]
+mod cdrom;
+
 #[path = "box_array.rs"]
 mod box_array;
 
