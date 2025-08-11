@@ -2,6 +2,9 @@
 // Based on the full rustation-ng architecture
 
 use super::error::{PsxError, Result};
+use crate::bios_hle::{BiosHle, BiosContext};
+use crate::spu::Spu;
+use crate::cdrom::CdRom;
 
 // Constants
 const CPU_FREQ_HZ: u32 = 33_868_800;
@@ -879,14 +882,21 @@ pub struct Gte {
     data: [u32; 32],
     // Control registers (rotation matrix, translation, etc.)
     control: [u32; 32],
+    // Flags register
+    flags: u32,
 }
 
 impl Gte {
     pub fn new() -> Self {
-        Gte {
+        let mut gte = Gte {
             data: [0; 32],
             control: [0; 32],
-        }
+            flags: 0,
+        };
+        // Initialize some default values
+        gte.control[29] = 0x155; // ZSF3
+        gte.control[30] = 0x100; // ZSF4
+        gte
     }
     
     pub fn data_reg(&self, index: u8) -> u32 {
@@ -905,9 +915,170 @@ impl Gte {
         self.control[index as usize & 0x1f] = val;
     }
     
-    pub fn execute(&mut self, _command: u32) {
-        // Simplified GTE - just set FLAG register to indicate completion
-        self.control[31] = 0; // FLAG - no errors
+    pub fn execute(&mut self, command: u32) {
+        // GTE command execution
+        let cmd = (command >> 20) & 0x3f;
+        
+        // Clear flags
+        self.flags = 0;
+        self.control[31] = 0;
+        
+        match cmd {
+            0x01 => self.rtps(), // Rotate, translate and perspective single
+            0x06 => self.nclip(), // Normal clipping
+            0x0c => self.op(), // Outer product
+            0x10 => self.dpcs(), // Depth cue single
+            0x12 => self.mvmva(command), // Matrix vector multiply
+            0x13 => self.ncds(), // Normal color depth single
+            0x16 => self.ncdt(), // Normal color depth triple
+            0x1b => self.nccs(), // Normal color color single
+            0x1e => self.nct(), // Normal color triple
+            0x20 => self.ncct(), // Normal color color triple
+            0x28 => self.sqr(), // Square of vector
+            0x29 => self.dcpl(), // Depth cue light
+            0x2a => self.dpct(), // Depth cue triple
+            0x2d => self.avsz3(), // Average of 3 Z values
+            0x2e => self.avsz4(), // Average of 4 Z values
+            0x30 => self.rtpt(), // Rotate, translate and perspective triple
+            0x3d => self.gpf(), // General purpose interpolation
+            0x3e => self.gpl(), // General purpose interpolation with base
+            0x3f => self.ncct(), // Normal color color triple
+            _ => {} // Unknown command
+        }
+    }
+    
+    // RTPS - Rotate, translate and perspective single
+    fn rtps(&mut self) {
+        // Simplified RTPS implementation
+        let vx = (self.data[0] as i16) as i32;
+        let vy = ((self.data[0] >> 16) as i16) as i32;
+        let vz = (self.data[1] as i16) as i32;
+        
+        // Apply rotation matrix (simplified)
+        let mac1 = (vx * ((self.control[0] as i16) as i32)) >> 12;
+        let mac2 = (vy * ((self.control[1] as i16) as i32)) >> 12;
+        let mac3 = (vz * ((self.control[2] as i16) as i32)) >> 12;
+        
+        // Store results
+        self.data[25] = (((mac1 as u32) & 0xffff) | (((mac2 as u32) & 0xffff) << 16));
+        self.data[26] = (mac3 as u32) & 0xffff;
+    }
+    
+    // NCLIP - Normal clipping
+    fn nclip(&mut self) {
+        // Simplified normal clipping
+        self.data[24] = 0; // MAC0 result
+    }
+    
+    // OP - Outer product
+    fn op(&mut self) {
+        // Simplified outer product
+    }
+    
+    // DPCS - Depth cue single
+    fn dpcs(&mut self) {
+        // Simplified depth cueing
+    }
+    
+    // MVMVA - Matrix vector multiply
+    fn mvmva(&mut self, command: u32) {
+        // Simplified matrix multiply
+        let _mx = (command >> 17) & 3;
+        let _vx = (command >> 15) & 3;
+        let _tx = (command >> 13) & 3;
+        
+        // Perform matrix multiplication (simplified)
+    }
+    
+    // NCDS - Normal color depth single
+    fn ncds(&mut self) {
+        // Simplified normal color depth calculation
+    }
+    
+    // NCDT - Normal color depth triple
+    fn ncdt(&mut self) {
+        // Process three vertices
+        for _ in 0..3 {
+            self.ncds();
+        }
+    }
+    
+    // NCCS - Normal color color single
+    fn nccs(&mut self) {
+        // Simplified normal color
+    }
+    
+    // NCT - Normal color triple
+    fn nct(&mut self) {
+        // Process three vertices
+        for _ in 0..3 {
+            self.nccs();
+        }
+    }
+    
+    // NCCT - Normal color color triple
+    fn ncct(&mut self) {
+        // Process three vertices with color
+        for _ in 0..3 {
+            self.nccs();
+        }
+    }
+    
+    // SQR - Square of vector
+    fn sqr(&mut self) {
+        // Square vector components
+    }
+    
+    // DCPL - Depth cue with light
+    fn dcpl(&mut self) {
+        // Depth cueing with light source
+    }
+    
+    // DPCT - Depth cue triple
+    fn dpct(&mut self) {
+        // Process three vertices
+        for _ in 0..3 {
+            self.dpcs();
+        }
+    }
+    
+    // AVSZ3 - Average of 3 Z values
+    fn avsz3(&mut self) {
+        // Average Z coordinates
+        let z0 = self.data[17] as u16 as u32;
+        let z1 = self.data[18] as u16 as u32;
+        let z2 = self.data[19] as u16 as u32;
+        let avg = (z0 + z1 + z2) / 3;
+        self.data[7] = avg; // OTZ
+    }
+    
+    // AVSZ4 - Average of 4 Z values
+    fn avsz4(&mut self) {
+        // Average Z coordinates
+        let z0 = self.data[17] as u16 as u32;
+        let z1 = self.data[18] as u16 as u32;
+        let z2 = self.data[19] as u16 as u32;
+        let z3 = self.data[20] as u16 as u32;
+        let avg = (z0 + z1 + z2 + z3) / 4;
+        self.data[7] = avg; // OTZ
+    }
+    
+    // RTPT - Rotate, translate and perspective triple
+    fn rtpt(&mut self) {
+        // Process three vertices
+        for _ in 0..3 {
+            self.rtps();
+        }
+    }
+    
+    // GPF - General purpose interpolation
+    fn gpf(&mut self) {
+        // Interpolation function
+    }
+    
+    // GPL - General purpose interpolation with base
+    fn gpl(&mut self) {
+        // Interpolation with base color
     }
 }
 
@@ -1527,11 +1698,17 @@ pub struct Psx {
     pub dma: Dma,
     pub irq: InterruptState,
     pub timers: Timers,
+    pub spu: Spu,
+    pub cdrom: CdRom,
     
     // Memory
     pub ram: Vec<u8>,
     pub bios: Vec<u8>,
     pub scratchpad: Vec<u8>,
+    
+    // BIOS HLE
+    pub bios_hle: BiosHle,
+    pub use_hle: bool,
     
     // Timing
     pub cycle_counter: CycleCount,
@@ -1551,9 +1728,13 @@ impl Psx {
             dma: Dma::new(),
             irq: InterruptState::new(),
             timers: Timers::new(),
+            spu: Spu::new(),
+            cdrom: CdRom::new(),
             ram: vec![0; RAM_SIZE],
             bios: vec![0; BIOS_SIZE],
             scratchpad: vec![0; 1024],
+            bios_hle: BiosHle::new(),
+            use_hle: false,
             cycle_counter: 0,
             next_event: 100,
             frame_done: false,
@@ -1568,6 +1749,8 @@ impl Psx {
         self.dma = Dma::new();
         self.irq = InterruptState::new();
         self.timers = Timers::new();
+        self.spu.reset();
+        self.cdrom.reset();
         self.ram.fill(0);
         self.scratchpad.fill(0);
         self.cycle_counter = 0;
@@ -1578,7 +1761,7 @@ impl Psx {
     pub fn init_with_disc(&mut self) -> Result<()> {
         // Initialize PSX with a disc loaded
         // The BIOS will handle the actual boot process
-        // For now, just ensure the system is ready without resetting
+        self.cdrom.insert_disc(1); // Insert disc with 1 track for now
         Ok(())
     }
     
@@ -1661,6 +1844,15 @@ impl Psx {
         // Simple VBlank simulation
         static mut VBLANK_COUNTER: i32 = 0;
         
+        // Step CDROM controller
+        self.cdrom.step(self.next_event as u32);
+        
+        // Check for CDROM interrupts
+        if self.cdrom.has_interrupt() {
+            self.irq.request(Interrupt::Cdrom);
+            self.cdrom.acknowledge_interrupt();
+        }
+        
         unsafe {
             VBLANK_COUNTER += self.next_event;
             if VBLANK_COUNTER >= 560000 {
@@ -1689,6 +1881,10 @@ impl Psx {
             0x1f000000..=0x1f0003ff => {
                 self.tick(1);
                 Ok(self.scratchpad[(physical & 0x3ff) as usize])
+            }
+            0x1f801800..=0x1f801803 => {
+                // CD-ROM registers
+                Ok(self.cdrom.read_register(physical))
             }
             0x1fc00000..=0x1fc7ffff => {
                 self.tick(1);
@@ -1754,18 +1950,57 @@ impl Psx {
                     _ => Ok(0),
                 }
             }
+            0x1f801800..=0x1f801803 => {
+                // CD-ROM registers
+                Ok(self.cdrom.read_register(physical) as u32)
+            }
             0x1f801810 => Ok(self.gpu.get_read()),
             0x1f801814 => Ok(self.gpu.get_status()),
             0x1fc00000..=0x1fc7ffff => {
                 self.tick(1);
                 let offset = (physical & 0x7ffff) as usize;
-                Ok(u32::from_le_bytes([
-                    self.bios[offset],
-                    self.bios[offset + 1],
-                    self.bios[offset + 2],
-                    self.bios[offset + 3],
-                ]))
+                if offset + 3 < self.bios.len() {
+                    Ok(u32::from_le_bytes([
+                        self.bios[offset],
+                        self.bios[offset + 1],
+                        self.bios[offset + 2],
+                        self.bios[offset + 3],
+                    ]))
+                } else {
+                    Ok(0)
+                }
             }
+            // Hardware registers
+            0x1f801070 => Ok(self.irq.status() as u32),
+            0x1f801074 => Ok(self.irq.mask() as u32),
+            0x1f801810 => Ok(self.gpu.get_read()),
+            0x1f801814 => Ok(self.gpu.get_status()),
+            // Timer registers
+            0x1f801100..=0x1f80112f => {
+                let timer = ((physical - 0x1f801100) / 0x10) as usize;
+                let offset = (physical & 0xf) / 4;
+                match offset {
+                    0 => Ok(self.timers.timer(timer).counter() as u32),
+                    1 => Ok(self.timers.timer(timer).mode() as u32),
+                    2 => Ok(self.timers.timer(timer).target() as u32),
+                    _ => Ok(0)
+                }
+            }
+            // DMA registers
+            0x1f801080..=0x1f8010ef => {
+                let channel = ((physical - 0x1f801080) / 0x10) as usize;
+                let offset = (physical & 0xf) / 4;
+                match offset {
+                    0 => Ok(self.dma.channel(channel).base()),
+                    1 => Ok(self.dma.channel(channel).block_control()),
+                    2 => Ok(self.dma.channel(channel).control()),
+                    _ => Ok(0)
+                }
+            }
+            0x1f8010f0 => Ok(self.dma.control()),
+            0x1f8010f4 => Ok(self.dma.interrupt()),
+            // SPU registers
+            0x1f801c00..=0x1f801dff => Ok(self.spu.read_register(physical & 0x3ff) as u32),
             _ => Ok(0xffffffff),
         }
     }
@@ -1781,6 +2016,10 @@ impl Psx {
             0x1f000000..=0x1f0003ff => {
                 self.tick(1);
                 self.scratchpad[(physical & 0x3ff) as usize] = val;
+            }
+            0x1f801800..=0x1f801803 => {
+                // CD-ROM registers
+                self.cdrom.write_register(physical, val);
             }
             _ => {}
         }
@@ -1846,8 +2085,47 @@ impl Psx {
                     _ => {}
                 }
             }
+            0x1f801800..=0x1f801803 => {
+                // CD-ROM registers
+                self.cdrom.write_register(physical, val as u8);
+            }
             0x1f801810 => self.gpu.gp0_write(val),
             0x1f801814 => self.gpu.gp1_write(val),
+            // SPU registers
+            0x1f801c00..=0x1f801dff => {
+                self.spu.write_register(physical & 0x3ff, val as u16);
+            }
+            // Memory control
+            0x1f801000 => {
+                // Expansion 1 base address
+            }
+            0x1f801004 => {
+                // Expansion 2 base address
+            }
+            0x1f801008 => {
+                // Expansion 1 delay/size
+            }
+            0x1f80100c => {
+                // Expansion 2 delay/size
+            }
+            0x1f801010 => {
+                // BIOS ROM delay/size
+            }
+            0x1f801014 => {
+                // SPU delay
+            }
+            0x1f801018 => {
+                // CDROM delay
+            }
+            0x1f80101c => {
+                // Expansion 3 delay/size
+            }
+            0x1f801020 => {
+                // COM delay
+            }
+            0x1f801060 => {
+                // RAM size
+            }
             _ => {}
         }
         
@@ -2125,9 +2403,29 @@ impl Psx {
                 }
             }
             0x0c => {
-                // ANDI
-                if rt != 0 {
-                    self.cpu.regs[rt] = self.cpu.regs[rs] & (imm as u32);
+                // SYSCALL - System call
+                if self.use_hle {
+                    // Handle BIOS HLE syscall
+                    let function = self.cpu.regs[9]; // t1
+                    let table = self.cpu.pc & 0xff;
+                    
+                    let mut ctx = BiosContext {
+                        regs: self.cpu.regs.clone(),
+                        ram: self.ram.clone(),
+                        pc: self.cpu.pc,
+                    };
+                    
+                    let result = self.bios_hle.handle_syscall(&mut ctx, function, table);
+                    
+                    // Update registers from context
+                    self.cpu.regs = ctx.regs;
+                    self.ram = ctx.ram;
+                    self.cpu.regs[2] = result; // v0 - return value
+                } else {
+                    // Trigger syscall exception
+                    let handler = self.cop0.exception(Exception::Syscall, self.cpu.current_pc, false);
+                    self.cpu.pc = handler;
+                    self.cpu.next_pc = handler.wrapping_add(4);
                 }
             }
             0x0d => {
@@ -2170,6 +2468,38 @@ impl Psx {
                         }
                     }
                     _ => {}
+                }
+            }
+            0x12 => {
+                // COP2 (GTE)
+                let cop_op = (instruction >> 21) & 0x1f;
+                match cop_op {
+                    0x00 => {
+                        // MFC2 - Move from GTE data register
+                        if rt != 0 {
+                            self.cpu.regs[rt] = self.gte.data_reg(rd as u8);
+                        }
+                    }
+                    0x02 => {
+                        // CFC2 - Move from GTE control register
+                        if rt != 0 {
+                            self.cpu.regs[rt] = self.gte.control_reg(rd as u8);
+                        }
+                    }
+                    0x04 => {
+                        // MTC2 - Move to GTE data register
+                        self.gte.set_data_reg(rd as u8, self.cpu.regs[rt]);
+                    }
+                    0x06 => {
+                        // CTC2 - Move to GTE control register
+                        self.gte.set_control_reg(rd as u8, self.cpu.regs[rt]);
+                    }
+                    _ => {
+                        // COP2 command (GTE operation)
+                        if cop_op >= 0x10 {
+                            self.gte.execute(instruction);
+                        }
+                    }
                 }
             }
             0x20 => {
