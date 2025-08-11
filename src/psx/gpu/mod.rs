@@ -8,6 +8,8 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod memory_prefetch;
+pub mod prefetch_benchmark;
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan_shader;
@@ -24,6 +26,8 @@ mod error_handler_tests;
 mod rendering_test;
 #[cfg(test)]
 mod shader_cache_test;
+#[cfg(test)]
+mod memory_prefetch_test;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
@@ -33,6 +37,7 @@ pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use memory_prefetch::{GpuMemoryPrefetcher, PrefetchConfig, MemoryAccess, AccessType};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
@@ -123,11 +128,25 @@ pub struct Gpu {
     rendering_pipeline: RenderingPipeline,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// GPU memory prefetching system
+    memory_prefetcher: GpuMemoryPrefetcher,
 }
 
 impl Gpu {
     pub fn new(video_standard: VideoStandard) -> Gpu {
         log::info!("GPU: Initializing with video standard: {:?}", video_standard);
+        
+        // Initialize memory prefetcher with optimized config
+        let prefetch_config = PrefetchConfig {
+            max_prefetch_distance: 16,
+            l2_cache_size: 2 * 1024 * 1024, // 2MB L2 cache
+            shared_memory_size: 64 * 1024,   // 64KB shared memory
+            enable_pattern_learning: true,
+            enable_profile_guided: true,
+            target_stall_reduction: 50.0,
+            warp_size: 32,
+            aggressiveness: 0.75,
+        };
         
         let mut gpu = Gpu {
             state: State::Idle,
@@ -172,6 +191,7 @@ impl Gpu {
             debug_overlay: DebugOverlay::new(),
             rendering_pipeline: RenderingPipeline::new(),
             shader_manager: None,
+            memory_prefetcher: GpuMemoryPrefetcher::new(prefetch_config),
         };
 
         gpu.refresh_lines_per_field();
@@ -304,6 +324,44 @@ impl Gpu {
         self.shader_manager.as_mut()
             .ok_or_else(|| "Shader manager not initialized".to_string())?
             .import_shader_pack(pack_path)
+    }
+    
+    /// Configure memory prefetcher
+    pub fn configure_prefetcher(&mut self, config: PrefetchConfig) {
+        self.memory_prefetcher = GpuMemoryPrefetcher::new(config);
+        log::info!("GPU: Memory prefetcher reconfigured");
+    }
+    
+    /// Get memory prefetch statistics
+    pub fn get_prefetch_stats(&self) -> memory_prefetch::PrefetchStats {
+        self.memory_prefetcher.get_stats()
+    }
+    
+    /// Prefetch texture data for upcoming draw operations
+    fn prefetch_texture_data(&mut self, tex_x: u16, tex_y: u16, width: u16, height: u16) {
+        // Calculate VRAM address for texture
+        let vram_addr = (tex_y as u64 * 1024 + tex_x as u64) * 2; // 2 bytes per pixel
+        
+        // Trigger texture prefetch
+        self.memory_prefetcher.prefetch_texture(
+            vram_addr,
+            width as usize,
+            height as usize,
+            2, // 16-bit color format
+        );
+    }
+    
+    /// Process memory access through prefetcher
+    fn access_vram_with_prefetch(&mut self, address: u64, size: usize, access_type: AccessType) -> Option<Vec<u8>> {
+        let access = MemoryAccess {
+            address,
+            size,
+            timestamp: std::time::Instant::now(),
+            access_type,
+            warp_id: 0, // Single warp for PSX GPU
+        };
+        
+        self.memory_prefetcher.access_memory(access)
     }
 
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer
@@ -766,6 +824,21 @@ fn draw_frame(psx: &mut Psx) {
     // Update debug overlay before sending frame
     psx.gpu.update_debug_overlay();
     
+    // Log prefetch statistics periodically
+    static mut FRAME_COUNT: u32 = 0;
+    unsafe {
+        FRAME_COUNT += 1;
+        if FRAME_COUNT % 60 == 0 { // Every 60 frames (1 second at 60fps)
+            let stats = psx.gpu.get_prefetch_stats();
+            log::info!(
+                "GPU Memory Prefetch Stats - Hit Rate: {:.1}%, Stall Reduction: {:.1}%, Prediction Accuracy: {:.1}%",
+                stats.hit_rate(),
+                stats.stall_reduction(),
+                stats.prediction_accuracy()
+            );
+        }
+    }
+    
     psx.gpu.rasterizer.end_of_frame();
     psx.gpu.frame_drawn = true;
     psx.frame_done = true;
@@ -978,9 +1051,48 @@ fn run_next_command(psx: &mut Psx) {
     if !command.out_of_band {
         psx.gpu.draw_time(2);
     }
+    
+    // Prefetch texture data if this is a textured draw command
+    prefetch_for_command(psx);
 
     // Invoke the callback to actually implement the command with error handling
     execute_command_with_error_handling(psx, command);
+}
+
+/// Prefetch texture data for upcoming draw command
+fn prefetch_for_command(psx: &mut Psx) {
+    if psx.gpu.command_fifo.is_empty() {
+        return;
+    }
+    
+    let opcode = psx.gpu.command_fifo.peek() >> 24;
+    
+    // Check if this is a textured primitive (opcodes 0x24-0x27, 0x2C-0x2F, 0x34-0x37, 0x3C-0x3F)
+    let is_textured = matches!(opcode, 
+        0x24..=0x27 | 0x2C..=0x2F | 0x34..=0x37 | 0x3C..=0x3F
+    );
+    
+    if is_textured && !psx.gpu.draw_mode.texture_disable() {
+        // Get texture page coordinates
+        let tex_page_x = psx.gpu.draw_mode.texture_page_x();
+        let tex_page_y = psx.gpu.draw_mode.texture_page_y();
+        
+        // Prefetch the texture page (256x256 for standard page)
+        psx.gpu.prefetch_texture_data(tex_page_x, tex_page_y, 256, 256);
+        
+        // Also prefetch CLUT if using paletted textures
+        let tex_depth = psx.gpu.draw_mode.texture_depth();
+        if tex_depth < 2 { // 4bpp or 8bpp paletted
+            // CLUT is typically in the upper part of VRAM
+            // This is a simplified prefetch - actual CLUT location varies
+            psx.gpu.memory_prefetcher.prefetch_texture(
+                0x1F800000, // CLUT base address
+                256,        // CLUT width
+                1,          // CLUT height
+                2,          // 16-bit entries
+            );
+        }
+    }
 }
 
 /// Execute a GPU command with proper error handling
