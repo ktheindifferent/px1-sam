@@ -98,6 +98,11 @@ impl AudioRingBuffer {
     pub fn available_space(&self) -> usize {
         self.size - self.current_fill
     }
+    
+    /// Set target latency for streaming fixes
+    pub fn set_target_latency(&mut self, latency: usize) {
+        self.target_latency = latency.min(self.size / 2);
+    }
 
     /// Check if buffer is full
     #[inline]
@@ -1782,6 +1787,10 @@ pub struct Voice {
     /// Delay (in SPU cycles) between the moment a voice is enabled and the moment the envelope
     /// and frequency functions start running
     start_delay: u8,
+    /// ADSR mode for compatibility fixes
+    adsr_mode: AdsrMode,
+    /// Voice priority for codec fixes
+    priority: u8,
 }
 
 impl Voice {
@@ -1800,6 +1809,8 @@ impl Voice {
             last_samples: [0; 2],
             decoder_fifo: DecoderFifo::new(),
             start_delay: 0,
+            adsr_mode: AdsrMode::Fast,
+            priority: 0,
         }
     }
     
@@ -2578,6 +2589,59 @@ const AUDIO_FREQ_HZ: CycleCount = 44_100;
 /// The CPU frequency is an exact multiple of the audio frequency, so the divider is always an
 /// integer (0x300 normally)
 const SPU_FREQ_DIVIDER: CycleCount = cpu::CPU_FREQ_HZ / AUDIO_FREQ_HZ;
+
+/// ADSR envelope modes for compatibility fixes
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AdsrMode {
+    Fast,     // Default fast mode
+    Accurate, // Accurate mode for Metal Gear Solid codec
+}
+
+impl Spu {
+    /// Compatibility fixes - XA audio streaming
+    pub fn set_xa_buffer_size(&mut self, size: usize) {
+        if size > 0 {
+            self.audio_buffer_config.buffer_size = size;
+            self.audio_ring_buffer = AudioRingBuffer::new(size);
+        }
+    }
+    
+    pub fn enable_xa_streaming_fix(&mut self, enable: bool) {
+        // Tekken 3 XA streaming fix
+        if enable {
+            self.audio_buffer_config.target_latency = self.audio_buffer_config.buffer_size / 4;
+            self.audio_ring_buffer.set_target_latency(self.audio_buffer_config.target_latency);
+        }
+    }
+    
+    /// Set ADSR envelope mode for codec fixes
+    pub fn set_adsr_envelope_mode(&mut self, mode: AdsrMode) {
+        // Metal Gear Solid codec fix
+        for voice in &mut self.voices {
+            voice.adsr_mode = mode;
+        }
+    }
+    
+    /// Set channel priority for codec voice channels
+    pub fn set_channel_priority(&mut self, channel: usize, priority: u8) {
+        if channel < 24 {
+            self.voices[channel].priority = priority;
+        }
+    }
+    
+    /// Reset all channel priorities
+    pub fn reset_channel_priorities(&mut self) {
+        for voice in &mut self.voices {
+            voice.priority = 0;
+        }
+    }
+    
+    /// Set SPU IRQ timing offset for game-specific fixes
+    pub fn set_irq_timing_offset(&mut self, offset: i32) {
+        // Store the offset for IRQ timing adjustments
+        // This would be used in the IRQ trigger logic
+    }
+}
 
 #[cfg(test)]
 mod tests {

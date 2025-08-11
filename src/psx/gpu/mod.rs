@@ -29,7 +29,6 @@ use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
 use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
-pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
@@ -119,8 +118,6 @@ pub struct Gpu {
     read_word: u32,
     /// Debug overlay for error visualization
     debug_overlay: DebugOverlay,
-    /// Hardware-accurate rendering pipeline
-    rendering_pipeline: RenderingPipeline,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
 }
@@ -170,7 +167,6 @@ impl Gpu {
             display_off: true,
             read_word: 0,
             debug_overlay: DebugOverlay::new(),
-            rendering_pipeline: RenderingPipeline::new(),
             shader_manager: None,
         };
 
@@ -1372,3 +1368,72 @@ const GPU_CYCLES_PER_CPU_CYCLES_PAL: u64 =
 const GPU_FREQ_NTSC_HZ: f64 = 53_693_181.818;
 /// GPU frequency for PAL consoles (Europe)
 const GPU_FREQ_PAL_HZ: f64 = 53_203_425.;
+
+/// Precision modes for geometry rendering
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Precision {
+    Standard,
+    Enhanced,
+}
+
+/// CLUT access modes for compatibility
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClutMode {
+    Normal,
+    SafeWithWrap,
+}
+
+/// Invalid command handling modes
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InvalidCmdMode {
+    Warn,
+    Ignore,
+}
+
+impl Gpu {
+    /// Compatibility fixes - set geometry precision
+    pub fn set_geometry_precision(&mut self, precision: Precision) {
+        match precision {
+            Precision::Enhanced => {
+                // Enhanced precision for Final Fantasy VIII
+                self.set_subpixel_precision(true);
+                // Store precision setting for use in rendering
+                self.set_rasterizer_option(RasterizerOption::EnhancedPrecision(true));
+            }
+            Precision::Standard => {
+                self.set_subpixel_precision(false);
+                self.set_rasterizer_option(RasterizerOption::EnhancedPrecision(false));
+            }
+        }
+    }
+    
+    /// Enable perspective correction for textures
+    pub fn enable_perspective_correction(&mut self, enable: bool) {
+        // Store setting for use in texture rendering
+        self.set_rasterizer_option(RasterizerOption::PerspectiveCorrection(enable));
+    }
+    
+    /// Set CLUT access mode for Dino Crisis 2 fixes
+    pub fn set_clut_access_mode(&mut self, mode: ClutMode) {
+        // This will be used in CLUT access handling
+        let safe_mode = mode == ClutMode::SafeWithWrap;
+        self.set_rasterizer_option(RasterizerOption::SafeClutMode(safe_mode));
+    }
+    
+    /// Set invalid command handling mode for Castlevania
+    pub fn set_invalid_command_handling(&mut self, mode: InvalidCmdMode) {
+        // This affects how invalid draw commands are processed
+        let ignore_invalid = mode == InvalidCmdMode::Ignore;
+        self.set_rasterizer_option(RasterizerOption::IgnoreInvalidCommands(ignore_invalid));
+    }
+    
+    /// Allow zero-size primitives for compatibility
+    pub fn allow_zero_size_primitives(&mut self, allow: bool) {
+        self.set_rasterizer_option(RasterizerOption::AllowZeroSizePrimitives(allow));
+    }
+    
+    /// Set vertex cache size for enhanced performance
+    pub fn set_vertex_cache_size(&mut self, size: usize) {
+        self.set_rasterizer_option(RasterizerOption::VertexCacheSize(size));
+    }
+}

@@ -68,11 +68,6 @@ features = [
   "GamepadButton",
 ]
 
-[features]
-default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
-online-sync = ["reqwest", "tokio", "compatibility-db"]
-
 [profile.release]
 opt-level = "s"
 lto = true
