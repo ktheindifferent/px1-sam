@@ -45,6 +45,7 @@ mod bitwise;
 mod box_array;
 mod disc_control;
 mod error;
+pub mod frame_pacing;
 mod memory_card;
 mod memory_card_manager;
 mod psx_memory_card_integration;
