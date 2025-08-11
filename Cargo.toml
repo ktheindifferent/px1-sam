@@ -18,6 +18,11 @@ wasm-logger = "0.2"
 bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
+rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+reqwest = { version = "0.11", features = ["json"], optional = true }
+tokio = { version = "1", features = ["rt", "macros"], optional = true }
 
 [dependencies.web-sys]
 version = "0.3"
@@ -40,6 +45,11 @@ features = [
   "Gamepad",
   "GamepadButton",
 ]
+
+[features]
+default = []
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [profile.release]
 opt-level = "s"

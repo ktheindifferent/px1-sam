@@ -192,6 +192,16 @@ impl Psx {
         self.gpu.video_standard()
     }
 
+    /// Check if a frame is ready
+    pub fn frame_ready(&self) -> bool {
+        self.frame_done
+    }
+
+    /// Get the current frame
+    pub fn get_frame(&self) -> Frame {
+        self.gpu.get_frame()
+    }
+
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
         self.frame_done = false;
