@@ -34,7 +34,7 @@ use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
 pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
-pub use spu::SpuDebugOverlay;
+pub use spu::{SpuDebugOverlay, interpolation};
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -245,6 +245,36 @@ impl Psx {
     /// Clear any pending audio samples. This must be called at least once per frame.
     pub fn clear_audio_samples(&mut self) {
         spu::clear_samples(self)
+    }
+
+    /// Set SPU interpolation method
+    pub fn set_spu_interpolation_method(&mut self, method: spu::interpolation::InterpolationMethod) {
+        self.spu.set_interpolation_method(method);
+    }
+
+    /// Get current SPU interpolation method
+    pub fn get_spu_interpolation_method(&self) -> spu::interpolation::InterpolationMethod {
+        self.spu.get_interpolation_method()
+    }
+
+    /// Set SPU interpolation configuration
+    pub fn set_spu_interpolation_config(&mut self, config: spu::interpolation::InterpolationConfig) {
+        self.spu.set_interpolation_config(config);
+    }
+
+    /// Get SPU interpolation configuration
+    pub fn get_spu_interpolation_config(&self) -> &spu::interpolation::InterpolationConfig {
+        self.spu.get_interpolation_config()
+    }
+
+    /// Set game ID for SPU interpolation profiles
+    pub fn set_game_id_for_spu(&mut self, game_id: String) {
+        self.spu.set_game_id(game_id);
+    }
+
+    /// Add custom SPU interpolation game profile
+    pub fn add_spu_game_profile(&mut self, profile: spu::interpolation::GameProfile) {
+        self.spu.add_game_profile(profile);
     }
 
     /// Set the internal resolution upscaling factor
