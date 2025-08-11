@@ -843,17 +843,64 @@ impl Gte {
         18
     }
 
-    /// Color Depth Cue
+    /// Color Depth Cue - Performs depth-based color modulation
+    /// This command is used by games like Vigilante 8 for depth-based color effects
     fn cmd_cdp(&mut self, config: CommandConfig) -> CycleCount {
+        // Copy IR registers to the 4th vector for matrix multiplication
         self.v[3][0] = self.ir[1];
         self.v[3][1] = self.ir[2];
         self.v[3][2] = self.ir[3];
 
+        // Multiply by color matrix with background color addition
         self.multiply_matrix_by_vector(config, Matrix::Color, 3, ControlVector::BackgroundColor);
 
-        self.cmd_dcpl(config);
+        // Perform depth cue color light calculations with proper overflow handling
+        self.do_cdp_dcpl(config);
 
         13
+    }
+
+    /// Enhanced DCPL for CDP command with proper overflow handling
+    fn do_cdp_dcpl(&mut self, config: CommandConfig) {
+        let fc = ControlVector::FarColor.index();
+        let (r, g, b, _) = self.rgb;
+        let col = [r, g, b];
+
+        for i in 0..3 {
+            // Far color component shifted to 44-bit precision
+            let fc = (self.control_vectors[fc][i] as i64) << 12;
+            let ir = self.ir[i + 1] as i32;
+            let col = (col[i] as i32) << 4;
+
+            // Calculate shading with proper precision and overflow checking
+            let shading = (col * ir) as i64;
+            
+            // Check for MAC overflow in shading calculation
+            if shading > 0x7fff_ffff || shading < -0x8000_0000 {
+                self.check_mac_overflow(shading);
+            }
+
+            // Calculate interpolation factor with 44-bit truncation
+            let tmp = fc - shading;
+            let tmp = (self.i64_to_i44(i as u8, tmp) >> config.shift) as i32;
+
+            // Apply depth interpolation using IR0 (depth value)
+            let ir0 = self.ir[0] as i64;
+            let res = self.i32_to_i16_saturate(CommandConfig::from_command(0), i as u8, tmp) as i64;
+            
+            // Final color calculation with proper 44-bit overflow checking
+            let final_res = shading + ir0 * res;
+            let res = self.i64_to_i44(i as u8, final_res);
+            
+            // Store result in MAC with shift applied
+            self.mac[i + 1] = (res >> config.shift) as i32;
+            
+            // Additional MAC overflow check for final result
+            self.check_mac_overflow((res >> config.shift) as i64);
+        }
+
+        self.mac_to_ir(config);
+        self.mac_to_rgb_fifo();
     }
 
     /// Normal Color Depth Cue Triple
