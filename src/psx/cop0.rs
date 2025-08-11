@@ -52,6 +52,30 @@ impl Cop0 {
         // since there's no MMU.
         0
     }
+
+    /// Set the SR register value (debugger only)
+    #[cfg(feature = "debugger")]
+    pub fn set_sr(&mut self, val: u32) {
+        self.sr = val;
+    }
+
+    /// Set the BAD register value (debugger only)
+    #[cfg(feature = "debugger")]
+    pub fn set_bad(&mut self, _val: u32) {
+        // BAD register not implemented yet
+    }
+
+    /// Get the EPC register value (debugger only)
+    #[cfg(feature = "debugger")]
+    pub fn epc(&self) -> u32 {
+        self.epc
+    }
+
+    /// Set the EPC register value (debugger only)
+    #[cfg(feature = "debugger")]
+    pub fn set_epc(&mut self, val: u32) {
+        self.epc = val;
+    }
 }
 
 /// Move To Coprocessor 0
@@ -176,6 +200,12 @@ pub fn cause(psx: &Psx) -> u32 {
     c |= (irq::active(psx) as u32) << 10;
 
     c
+}
+
+/// Set the cause register value (debugger only)
+#[cfg(feature = "debugger")]
+pub fn set_cause(psx: &mut Psx, val: u32) {
+    psx.cop0.cause = val;
 }
 
 /// Returns true if the CPU should be interrupted

@@ -122,6 +122,26 @@ impl Cpu {
         self.hi
     }
 
+    /// Set the value of the HI register
+    #[cfg(feature = "debugger")]
+    pub fn set_hi(&mut self, val: u32) {
+        self.hi = val;
+    }
+
+    /// Set the value of the LO register
+    #[cfg(feature = "debugger")]
+    pub fn set_lo(&mut self, val: u32) {
+        self.lo = val;
+    }
+
+    /// Set a general purpose register value
+    #[cfg(feature = "debugger")]
+    pub fn set_reg(&mut self, index: RegisterIndex, val: u32) {
+        self.regs[index.0 as usize] = val;
+        // R0 always contains 0
+        self.regs[0] = 0;
+    }
+
     /// Rebase our internal counters that are relative to the global `cycle_counter`
     pub fn rebase_counters(&mut self, cycle_counter: CycleCount) {
         if self.mult_div_end > 0 {

@@ -9,7 +9,7 @@ use crate::debugger::Debugger;
 
 use self::reply::Reply;
 
-mod reply;
+pub(super) mod reply;
 
 pub type GdbResult = Result<(), ()>;
 
@@ -159,11 +159,21 @@ impl GdbRemote {
         let res = match command {
             b'?' => self.send_status(),
             b'm' => self.read_memory(psx, args),
+            b'M' => self.write_memory(psx, args),
             b'g' => self.read_registers(psx),
+            b'G' => self.write_registers(psx, args),
+            b'P' => self.write_register(psx, args),
             b'c' => self.resume(debugger, psx, args),
             b's' => self.step(debugger, psx, args),
             b'Z' => self.add_breakpoint(debugger, args),
             b'z' => self.del_breakpoint(debugger, args),
+            b'q' => self.handle_query(debugger, args),
+            b'Q' => self.handle_set(args),
+            b'k' => self.kill(),
+            b'D' => self.detach(debugger),
+            b'H' => self.set_thread(args),
+            b'T' => self.thread_alive(args),
+            b'v' => self.handle_v_packet(debugger, psx, args),
             // Send empty response for unsupported packets
             _ => self.send_empty_reply(),
         };
@@ -418,6 +428,237 @@ impl GdbRemote {
 
         self.send_ok()
     }
+
+    /// Write memory
+    fn write_memory(&mut self, psx: &mut Psx, args: &[u8]) -> GdbResult {
+        // Parse ADDR,LEN:DATA format
+        let mut parts = args.split(|&b| b == b':');
+        
+        let addr_len = parts.next().ok_or(())?;
+        let data = parts.next().ok_or(())?;
+        
+        let (addr, len) = parse_addr_len(addr_len)?;
+        
+        // Convert hex data to bytes
+        let mut offset = 0;
+        for i in 0..len {
+            if data.len() < (i as usize + 1) * 2 {
+                return self.send_error();
+            }
+            
+            let h = ascii_hex(data[i as usize * 2]).ok_or(())?;
+            let l = ascii_hex(data[i as usize * 2 + 1]).ok_or(())?;
+            let byte = (h << 4) | l;
+            
+            psx.store::<u8>(addr.wrapping_add(offset), byte);
+            offset += 1;
+        }
+        
+        self.send_ok()
+    }
+
+    /// Write all registers
+    fn write_registers(&mut self, psx: &mut Psx, args: &[u8]) -> GdbResult {
+        // Each register is 8 hex chars (32 bits)
+        if args.len() < 38 * 8 {
+            return self.send_error();
+        }
+        
+        // Parse general purpose registers (skip R0 which is always 0)
+        for i in 1..32 {
+            let offset = i * 8;
+            let reg_hex = &args[offset..offset + 8];
+            let value = parse_hex(reg_hex)?;
+            psx.cpu.set_reg(RegisterIndex(i as u8), value);
+        }
+        
+        // Parse special registers
+        let sr = parse_hex(&args[32 * 8..33 * 8])?;
+        let lo = parse_hex(&args[33 * 8..34 * 8])?;
+        let hi = parse_hex(&args[34 * 8..35 * 8])?;
+        let bad = parse_hex(&args[35 * 8..36 * 8])?;
+        let cause = parse_hex(&args[36 * 8..37 * 8])?;
+        let pc = parse_hex(&args[37 * 8..38 * 8])?;
+        
+        psx.cop0.set_sr(sr);
+        psx.cpu.set_lo(lo);
+        psx.cpu.set_hi(hi);
+        psx.cop0.set_bad(bad);
+        cop0::set_cause(psx, cause);
+        psx.cpu.force_pc(pc);
+        
+        self.send_ok()
+    }
+
+    /// Write a single register
+    fn write_register(&mut self, psx: &mut Psx, args: &[u8]) -> GdbResult {
+        // Parse format: REGNUM=VALUE
+        let mut parts = args.split(|&b| b == b'=');
+        
+        let reg_num = parts.next().ok_or(())?;
+        let value_hex = parts.next().ok_or(())?;
+        
+        let reg_num = parse_hex(reg_num)?;
+        let value = parse_hex(value_hex)?;
+        
+        match reg_num {
+            0..=31 => {
+                if reg_num != 0 {  // R0 is always 0
+                    psx.cpu.set_reg(RegisterIndex(reg_num as u8), value);
+                }
+            }
+            32 => psx.cop0.set_sr(value),
+            33 => psx.cpu.set_lo(value),
+            34 => psx.cpu.set_hi(value),
+            35 => psx.cop0.set_bad(value),
+            36 => cop0::set_cause(psx, value),
+            37 => psx.cpu.force_pc(value),
+            _ => return self.send_error(),
+        }
+        
+        self.send_ok()
+    }
+
+    /// Handle query packets
+    fn handle_query(&mut self, debugger: &mut Debugger, args: &[u8]) -> GdbResult {
+        if args.starts_with(b"Supported") {
+            // Report supported features
+            self.send_string(b"PacketSize=1000;qXfer:features:read+;qXfer:threads:read+;QStartNoAckMode+;multiprocess+;swbreak+;hwbreak+")
+        } else if args.starts_with(b"Attached") {
+            // We're always attached
+            self.send_string(b"1")
+        } else if args.starts_with(b"fThreadInfo") {
+            // Report single thread
+            self.send_string(b"m1")
+        } else if args.starts_with(b"sThreadInfo") {
+            // No more threads
+            self.send_string(b"l")
+        } else if args.starts_with(b"ThreadExtraInfo") {
+            // Thread info
+            let mut reply = Reply::new();
+            reply.push(b"PSX Main CPU");
+            self.send_reply(reply)
+        } else if args.starts_with(b"Symbol") {
+            // Symbol lookup
+            self.handle_symbol_query(debugger, args)
+        } else if args.starts_with(b"Offsets") {
+            // Report no offset
+            self.send_string(b"Text=0;Data=0;Bss=0")
+        } else {
+            self.send_empty_reply()
+        }
+    }
+
+    /// Handle set packets
+    fn handle_set(&mut self, args: &[u8]) -> GdbResult {
+        if args.starts_with(b"StartNoAckMode") {
+            // Could enable no-ack mode here for better performance
+            self.send_ok()
+        } else {
+            self.send_empty_reply()
+        }
+    }
+
+    /// Kill the target
+    fn kill(&mut self) -> GdbResult {
+        // In an emulator context, we don't actually kill anything
+        // Just acknowledge the command
+        self.send_ok()
+    }
+
+    /// Detach from target
+    fn detach(&mut self, debugger: &mut Debugger) -> GdbResult {
+        // Clear all breakpoints and continue execution
+        debugger.breakpoints.clear();
+        debugger.read_watchpoints.clear();
+        debugger.write_watchpoints.clear();
+        debugger.resume();
+        self.send_ok()
+    }
+
+    /// Set thread for subsequent operations
+    fn set_thread(&mut self, _args: &[u8]) -> GdbResult {
+        // We only have one thread
+        self.send_ok()
+    }
+
+    /// Check if thread is alive
+    fn thread_alive(&mut self, _args: &[u8]) -> GdbResult {
+        // Our single thread is always alive
+        self.send_ok()
+    }
+
+    /// Handle v packets (extended commands)
+    fn handle_v_packet(&mut self, debugger: &mut Debugger, psx: &mut Psx, args: &[u8]) -> GdbResult {
+        if args.starts_with(b"Cont?") {
+            // Report supported continue actions
+            self.send_string(b"vCont;c;s;C;S")
+        } else if args.starts_with(b"Cont") {
+            // Parse vCont commands
+            let cmd = &args[4..];
+            if cmd.starts_with(b";c") {
+                // Continue
+                self.resume(debugger, psx, &[])
+            } else if cmd.starts_with(b";s") {
+                // Step
+                self.step(debugger, psx, &[])
+            } else {
+                self.send_error()
+            }
+        } else if args.starts_with(b"Kill") {
+            self.kill()
+        } else {
+            self.send_empty_reply()
+        }
+    }
+
+    /// Handle symbol queries
+    fn handle_symbol_query(&mut self, debugger: &mut Debugger, args: &[u8]) -> GdbResult {
+        // Parse qSymbol:[sym_value:]sym_name
+        if args.starts_with(b"Symbol::") {
+            // Initial query, just acknowledge
+            self.send_ok()
+        } else if args.starts_with(b"Symbol:") {
+            // Symbol lookup request
+            let data = &args[7..];
+            
+            // Find the colon separator if present (for value:name format)
+            let parts: Vec<_> = data.split(|&b| b == b':').collect();
+            
+            if parts.len() == 2 {
+                // We got a symbol value and name
+                let _value = parts[0];
+                let name_hex = parts[1];
+                
+                // Convert hex-encoded name to string
+                let name = self.decode_hex_string(name_hex)?;
+                
+                // Store the symbol if needed
+                info!("GDB provided symbol: {}", name);
+            }
+            
+            self.send_ok()
+        } else {
+            self.send_empty_reply()
+        }
+    }
+
+    /// Decode a hex-encoded string
+    fn decode_hex_string(&self, hex: &[u8]) -> Result<String, ()> {
+        let mut result = Vec::new();
+        
+        if hex.len() % 2 != 0 {
+            return Err(());
+        }
+        
+        for i in (0..hex.len()).step_by(2) {
+            let h = ascii_hex(hex[i]).ok_or(())?;
+            let l = ascii_hex(hex[i + 1]).ok_or(())?;
+            result.push((h << 4) | l);
+        }
+        
+        String::from_utf8(result).map_err(|_| ())
+    }
 }
 
 enum PacketResult {
@@ -428,7 +669,7 @@ enum PacketResult {
 
 /// Get the value of an integer encoded in single lowercase hexadecimal ASCII digit. Return None if
 /// the character is not valid hexadecimal
-fn ascii_hex(b: u8) -> Option<u8> {
+pub(super) fn ascii_hex(b: u8) -> Option<u8> {
     if b.is_ascii_digit() {
         Some(b - b'0')
     } else if b.is_ascii_hexdigit() {
@@ -441,7 +682,7 @@ fn ascii_hex(b: u8) -> Option<u8> {
 
 /// Parse an hexadecimal string and return the value as an
 /// integer. Return `None` if the string is invalid.
-fn parse_hex(hex: &[u8]) -> Result<u32, ()> {
+pub(super) fn parse_hex(hex: &[u8]) -> Result<u32, ()> {
     let mut v = 0u32;
 
     for &b in hex {
@@ -460,7 +701,7 @@ fn parse_hex(hex: &[u8]) -> Result<u32, ()> {
 /// Parse a string in the format `addr,len` (both as hexadecimal
 /// strings) and return the values as a tuple. Returns `None` if
 /// the format is bogus.
-fn parse_addr_len(args: &[u8]) -> Result<(u32, u32), ()> {
+pub(super) fn parse_addr_len(args: &[u8]) -> Result<(u32, u32), ()> {
     // split around the comma
     let args: Vec<_> = args.split(|&b| b == b',').collect();
 
@@ -487,7 +728,7 @@ fn parse_addr_len(args: &[u8]) -> Result<(u32, u32), ()> {
 /// Parse breakpoint arguments: the format is
 /// `type,addr,kind`. Returns the three parameters in a tuple or an
 /// error if a format error has been encountered.
-fn parse_breakpoint(args: &[u8]) -> Result<(u8, u32, u8), ()> {
+pub(super) fn parse_breakpoint(args: &[u8]) -> Result<(u8, u32, u8), ()> {
     // split around the comma
     let args: Vec<_> = args.split(|&b| b == b',').collect();
 
