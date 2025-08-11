@@ -23,8 +23,12 @@ impl Bitwise for u8 {
     }
 
     fn set_bit(&mut self, bitpos: u8, v: bool) {
-        *self &= !(1u8 << bitpos);
-        *self |= (v as u8) << bitpos;
+        let mask = 1u8 << bitpos;
+        if v {
+            *self |= mask;
+        } else {
+            *self &= !mask;
+        }
     }
 }
 
@@ -34,8 +38,12 @@ impl Bitwise for u16 {
     }
 
     fn set_bit(&mut self, bitpos: u8, v: bool) {
-        *self &= !(1u16 << bitpos);
-        *self |= (v as u16) << bitpos;
+        let mask = 1u16 << bitpos;
+        if v {
+            *self |= mask;
+        } else {
+            *self &= !mask;
+        }
     }
 }
 
@@ -45,8 +53,12 @@ impl Bitwise for u32 {
     }
 
     fn set_bit(&mut self, bitpos: u8, v: bool) {
-        *self &= !(1u32 << bitpos);
-        *self |= (v as u32) << bitpos;
+        let mask = 1u32 << bitpos;
+        if v {
+            *self |= mask;
+        } else {
+            *self &= !mask;
+        }
     }
 }
 
