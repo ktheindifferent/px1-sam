@@ -17,6 +17,7 @@ mod link_cable;
 mod mdec;
 mod memory_control;
 pub mod memory_map;
+pub mod overlay;
 pub mod pad_memcard;
 mod spu;
 mod sync;
@@ -26,6 +27,7 @@ mod xmem;
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
+pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
 pub use spu::SpuDebugOverlay;
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
@@ -75,6 +77,9 @@ pub struct Psx {
     dma_timing_penalty: CycleCount,
     /// When this variable is `true` the CPU is stopped for DMA operation
     cpu_stalled_for_dma: bool,
+    /// Developer overlay system (not serialized)
+    #[serde(skip)]
+    developer_overlay: overlay::DeveloperOverlay,
 }
 
 impl Psx {
@@ -126,6 +131,7 @@ impl Psx {
             cache_control: 0,
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
+            developer_overlay: overlay::DeveloperOverlay::new(),
         })
     }
 
@@ -202,6 +208,11 @@ impl Psx {
             sync::handle_events(self);
         }
 
+        // Update developer overlay if enabled
+        if self.developer_overlay.is_enabled() {
+            self.update_developer_overlay(self.cycle_counter);
+        }
+
         // Rebase the event counters relative to the cycle_counter to make sure they don't overflow
         sync::rebase_counters(self);
     }
@@ -244,6 +255,32 @@ impl Psx {
     /// Get SPU debug overlay data if enabled
     pub fn get_spu_debug_overlay(&self) -> Option<&spu::SpuDebugOverlay> {
         self.spu.get_debug_overlay()
+    }
+
+    /// Enable or disable the developer overlay
+    pub fn set_developer_overlay_enabled(&mut self, enabled: bool) {
+        self.developer_overlay.set_enabled(enabled);
+    }
+
+    /// Check if developer overlay is enabled
+    pub fn is_developer_overlay_enabled(&self) -> bool {
+        self.developer_overlay.is_enabled()
+    }
+
+    /// Get the developer overlay for configuration
+    pub fn developer_overlay_mut(&mut self) -> &mut overlay::DeveloperOverlay {
+        &mut self.developer_overlay
+    }
+
+    /// Get the developer overlay render data
+    pub fn get_developer_overlay_render_data(&self) -> overlay::renderer::OverlayRenderData {
+        let renderer = overlay::renderer::OverlayRenderer::new();
+        renderer.render(&self.developer_overlay)
+    }
+
+    /// Update developer overlay metrics
+    fn update_developer_overlay(&mut self, elapsed_cycles: CycleCount) {
+        self.developer_overlay.update(self, elapsed_cycles);
     }
 
     /// Advance the CPU cycle counter by the given number of ticks

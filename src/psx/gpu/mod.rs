@@ -3,6 +3,7 @@ mod fifo;
 mod rasterizer;
 mod error_handler;
 mod debug_overlay;
+pub mod texture_cache;
 
 #[cfg(test)]
 mod error_handler_tests;

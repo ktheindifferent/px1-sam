@@ -5,9 +5,14 @@ use crate::psx::map::mask_region;
 use crate::psx::Psx;
 
 use self::gdb::GdbRemote;
+use self::elf::SymbolTable;
 
 mod bios;
 mod gdb;
+mod elf;
+
+#[cfg(test)]
+mod tests;
 
 /// Rustation-libretro debugger, based on the GDB remote serial interface
 pub struct Debugger {
@@ -27,6 +32,8 @@ pub struct Debugger {
     write_watchpoints: Vec<u32>,
     /// If true we additionally log BIOS calls
     log_bios_calls: bool,
+    /// Symbol table for debugging
+    symbol_table: SymbolTable,
 }
 
 impl Debugger {
@@ -50,11 +57,27 @@ impl Debugger {
             read_watchpoints: Vec::new(),
             write_watchpoints: Vec::new(),
             log_bios_calls: false,
+            symbol_table: SymbolTable::new(),
         }
     }
 
     pub fn set_log_bios_calls(&mut self, enable: bool) {
         self.log_bios_calls = enable;
+    }
+
+    /// Load symbols from an ELF file
+    pub fn load_symbols(&mut self, path: &str) -> Result<usize, String> {
+        self.symbol_table.load_elf(path)
+    }
+
+    /// Get the symbol table
+    pub fn symbol_table(&self) -> &SymbolTable {
+        &self.symbol_table
+    }
+
+    /// Get mutable reference to symbol table
+    pub fn symbol_table_mut(&mut self) -> &mut SymbolTable {
+        &mut self.symbol_table
     }
 
     fn debug(&mut self, psx: &mut Psx) {

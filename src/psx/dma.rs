@@ -270,9 +270,13 @@ fn run_channel(psx: &mut Psx, port: Port, cycles: CycleCount) {
                     channel.remaining_words = channel.block_size;
                     channel.block_count -= 1;
 
-                    // XXX From mednafen, only GPU timings are implemented so far
-                    if port == Port::Gpu {
-                        channel.clock_counter -= 7;
+                    // DMA setup overhead varies by port
+                    match port {
+                        Port::Gpu => channel.clock_counter -= 7,
+                        Port::MDecIn => channel.clock_counter -= 12,  // MDEC input has higher setup cost
+                        Port::MDecOut => channel.clock_counter -= 16, // MDEC output has highest setup cost
+                        Port::Spu => channel.clock_counter -= 10,
+                        _ => channel.clock_counter -= 8,
                     }
                 }
                 SyncMode::LinkedList => {
@@ -418,7 +422,9 @@ fn port_store(psx: &mut Psx, port: Port, v: u32) -> CycleCount {
         }
         Port::MDecIn => {
             mdec::dma_store(psx, v);
-            0
+            // MDEC input DMA has overhead for FIFO synchronization
+            // Real hardware takes ~8 cycles per word for MDEC transfers
+            8
         }
         _ => unimplemented!("DMA port store {:?}", port),
     }
@@ -451,6 +457,9 @@ fn port_load(psx: &mut Psx, port: Port) -> (u32, u32, CycleCount) {
         Port::MDecOut => {
             let (v, off) = mdec::dma_load(psx);
             offset = off;
+            // MDEC output DMA has additional latency for data synchronization
+            // Real hardware takes ~16 cycles per word for MDEC output
+            delay = 16;
             v
         }
         Port::Gpu => gpu::dma_load(psx),

@@ -10,6 +10,7 @@ use crate::psx::gpu::commands::{vram_access_dimensions, Shaded};
 use crate::psx::gpu::commands::{NoShading, Position, Transparent};
 use crate::psx::gpu::commands::{NoTexture, Opaque, ShadingMode, TextureBlending, TextureRaw};
 use crate::psx::gpu::commands::{TextureMode, TransparencyMode};
+use crate::psx::gpu::texture_cache::GpuCache;
 use crate::VRamDisplayMode;
 
 use crate::psx::gpu::{DisplayMode, DrawMode, MaskSettings, TextureWindow, TransparencyFunction};
@@ -102,6 +103,9 @@ pub struct Rasterizer {
     draw_wireframe: bool,
     /// If false we don't draw triangles or quads
     draw_polygons: bool,
+    /// Enhanced texture and CLUT cache
+    #[serde(skip)]
+    gpu_cache: GpuCache,
 }
 
 impl Rasterizer {
@@ -135,6 +139,7 @@ impl Rasterizer {
             display_bottom_field: false,
             draw_wireframe: false,
             draw_polygons: true,
+            gpu_cache: GpuCache::new(),
         }
     }
 
@@ -167,6 +172,9 @@ impl Rasterizer {
     ) {
         self.rebuild_dither_table();
         self.new_frame();
+        
+        // Counter for periodic cache statistics reporting
+        let mut frame_counter = 0u32;
 
         loop {
             let commands = command_channel.recv().unwrap();
@@ -219,6 +227,8 @@ impl Rasterizer {
                                             y,
                                             self.mask_settings.mask(p),
                                         );
+                                        // Invalidate cache for this pixel
+                                        self.gpu_cache.invalidate_region(x, y, 1, 1);
                                     }
 
                                     if store.next().is_none() {
@@ -263,6 +273,19 @@ impl Rasterizer {
                     Command::EndOfFrame => {
                         let frame = self.new_frame();
                         frame_channel.send(frame).unwrap();
+                        
+                        // Log cache statistics periodically (every 60 frames)
+                        frame_counter += 1;
+                        if frame_counter % 60 == 0 {
+                            if log::log_enabled!(log::Level::Debug) {
+                                let tex_stats = self.gpu_cache.texture_cache.statistics();
+                                let clut_stats = self.gpu_cache.clut_cache.statistics();
+                                log::debug!("Texture Cache - Hit rate: {:.1}%, Hits: {}, Misses: {}", 
+                                    tex_stats.hit_rate() * 100.0, tex_stats.hits, tex_stats.misses);
+                                log::debug!("CLUT Cache - Hit rate: {:.1}%, Hits: {}, Misses: {}", 
+                                    clut_stats.hit_rate() * 100.0, clut_stats.hits, clut_stats.misses);
+                            }
+                        }
                     }
                     Command::FieldChanged(f) => self.display_bottom_field = *f,
                     Command::Option(opt) => self.set_option(*opt),
@@ -1355,7 +1378,7 @@ impl Rasterizer {
     }
 
     fn get_texel(&mut self, u: u8, v: u8) -> Pixel {
-        self.tex_mapper.get_texel(u, v, &self.vram)
+        self.tex_mapper.get_texel(u, v, &self.vram, &mut self.gpu_cache)
     }
 
     fn blend(&self, texel: Pixel, color: Pixel) -> Pixel {
@@ -1806,7 +1829,7 @@ impl TextureMapper {
         self.v_offset += tp_y;
     }
 
-    pub fn get_texel(&mut self, u: u8, v: u8, vram: &VRam) -> Pixel {
+    pub fn get_texel(&mut self, u: u8, v: u8, vram: &VRam, gpu_cache: &mut GpuCache) -> Pixel {
         let pts = u16::from(self.pixel_to_texel_shift);
         let fb_u = u16::from(u & self.u_mask) + self.u_offset;
         let fb_v = u16::from(v & self.v_mask) + self.v_offset;
@@ -2513,43 +2536,124 @@ fn cmd_vram_copy(rasterizer: &mut Rasterizer, params: &[u32]) {
     let dst = params[2];
     let dim = params[3];
 
-    let src_x = ((src & 0x3ff) as i32) << rasterizer.vram.upscale_shift;
-    let src_y = (((src >> 16) & 0x3ff) as i32) << rasterizer.vram.upscale_shift;
-    let dst_x = ((dst & 0x3ff) as i32) << rasterizer.vram.upscale_shift;
-    let dst_y = (((dst >> 16) & 0x3ff) as i32) << rasterizer.vram.upscale_shift;
+    // Extract source and destination coordinates with proper masking
+    // Note: coordinates are 10-bit values (0-1023 for X, 0-511 for Y in native resolution)
+    let src_x = (src & 0x3ff) as i32;
+    let src_y = ((src >> 16) & 0x1ff) as i32;  // Fixed: Y coordinate is 9-bit (0-511)
+    let dst_x = (dst & 0x3ff) as i32;
+    let dst_y = ((dst >> 16) & 0x1ff) as i32;  // Fixed: Y coordinate is 9-bit (0-511)
+
+    // Apply upscaling after extracting coordinates
+    let src_x_scaled = src_x << rasterizer.vram.upscale_shift;
+    let src_y_scaled = src_y << rasterizer.vram.upscale_shift;
+    let dst_x_scaled = dst_x << rasterizer.vram.upscale_shift;
+    let dst_y_scaled = dst_y << rasterizer.vram.upscale_shift;
 
     let (width, height) = vram_access_dimensions(dim, false);
+    
+    // Bounds check to prevent crashes
+    if width <= 0 || height <= 0 || width > 1024 || height > 512 {
+        // Invalid dimensions, skip the copy
+        return;
+    }
 
-    // From mednafen, is it because it's used as a temporary buffer for the copy? Is there a
-    // different buffer?
+    // Scale width and height for upscaled rendering
+    let width_scaled = width << rasterizer.vram.upscale_shift;
+    let height_scaled = height << rasterizer.vram.upscale_shift;
+
+    // Invalidate texture cache as VRAM is being modified
     rasterizer.tex_mapper.cache_invalidate();
+    
+    // Invalidate the enhanced cache for the destination region
+    let dst_x_native = (dst & 0x3ff) as u16;
+    let dst_y_native = ((dst >> 16) & 0x3ff) as u16;
+    let (width_native, height_native) = vram_access_dimensions(dim, true);
+    rasterizer.gpu_cache.invalidate_region(dst_x_native, dst_y_native, width_native as u16, height_native as u16);
 
-    let xmask = (0x400 << rasterizer.vram.upscale_shift) - 1;
-    let ymask = (0x200 << rasterizer.vram.upscale_shift) - 1;
+    // Masks for coordinate wrapping (VRAM is 1024x512 in native resolution)
+    let xmask = (1024 << rasterizer.vram.upscale_shift) - 1;
+    let ymask = (512 << rasterizer.vram.upscale_shift) - 1;
 
-    for y in 0..height {
-        let sy = (y + src_y) & ymask;
-        let ty = (y + dst_y) & ymask;
+    // Check if source and destination regions overlap
+    // We need to check in the wrapped coordinate space
+    let check_overlap = |src_start: i32, src_size: i32, dst_start: i32, max_val: i32| -> bool {
+        // Handle wrapping by checking if regions overlap when considering modulo arithmetic
+        let src_end = src_start + src_size;
+        let dst_end = dst_start + src_size;
+        
+        if src_end <= max_val && dst_end <= max_val {
+            // No wrapping case
+            !(dst_start >= src_end || src_start >= dst_end)
+        } else {
+            // At least one region wraps, always use buffer to be safe
+            true
+        }
+    };
+    
+    let x_overlap = check_overlap(src_x, width, dst_x, 1024);
+    let y_overlap = check_overlap(src_y, height, dst_y, 512);
+    let regions_overlap = x_overlap && y_overlap;
 
-        for x in (0..width).step_by(128) {
-            // The use of a 128px intermediate buffer is taken from mednafen
-            // XXX should we scale with the upscale_shift?
-            let mut copy_buf: [Pixel; 128] = [Pixel(0); 128];
-
-            let w = std::cmp::min(width - x, 128);
-
-            for dx in 0..w {
-                let sx = (src_x + x + dx) & xmask;
-                copy_buf[dx as usize] = rasterizer.read_pixel(sx, sy);
+    // Always use intermediate buffer for overlapping regions or large transfers
+    // This fixes graphical glitches in games like Castlevania
+    if regions_overlap || (width * height) > 256 {
+        // For overlapping regions or large copies, use a full intermediate buffer
+        // This prevents corruption when source and destination overlap
+        let buffer_size = (width_scaled * height_scaled) as usize;
+        
+        // Limit buffer size to prevent excessive memory allocation
+        if buffer_size > 1024 * 512 * 16 {  // Max 16x upscale of full VRAM
+            return;  // Skip extremely large copies that might be invalid
+        }
+        
+        let mut copy_buffer = vec![Pixel(0); buffer_size];
+        
+        // First pass: read all pixels from source into buffer
+        for y in 0..height_scaled {
+            let sy = (src_y_scaled + y) & ymask;
+            for x in 0..width_scaled {
+                let sx = (src_x_scaled + x) & xmask;
+                let idx = (y * width_scaled + x) as usize;
+                copy_buffer[idx] = rasterizer.read_pixel(sx, sy);
             }
-
-            for dx in 0..w {
-                let tx = (dst_x + x + dx) & xmask;
-
-                let p = copy_buf[dx as usize];
-
+        }
+        
+        // Second pass: write all pixels from buffer to destination
+        for y in 0..height_scaled {
+            let ty = (dst_y_scaled + y) & ymask;
+            for x in 0..width_scaled {
+                let tx = (dst_x_scaled + x) & xmask;
+                let idx = (y * width_scaled + x) as usize;
+                let p = copy_buffer[idx];
+                
                 // VRAM copy respects mask bit settings
                 rasterizer.draw_pixel::<Opaque, NoTexture>(tx, ty, p);
+            }
+        }
+    } else {
+        // For non-overlapping small copies, use the optimized chunked approach
+        for y in 0..height_scaled {
+            let sy = (src_y_scaled + y) & ymask;
+            let ty = (dst_y_scaled + y) & ymask;
+
+            for x in (0..width_scaled).step_by(128) {
+                // Use a 128px intermediate buffer for better cache performance
+                let mut copy_buf: [Pixel; 128] = [Pixel(0); 128];
+
+                let w = std::cmp::min(width_scaled - x, 128);
+
+                for dx in 0..w {
+                    let sx = (src_x_scaled + x + dx) & xmask;
+                    copy_buf[dx as usize] = rasterizer.read_pixel(sx, sy);
+                }
+
+                for dx in 0..w {
+                    let tx = (dst_x_scaled + x + dx) & xmask;
+                    let p = copy_buf[dx as usize];
+
+                    // VRAM copy respects mask bit settings
+                    rasterizer.draw_pixel::<Opaque, NoTexture>(tx, ty, p);
+                }
             }
         }
     }
@@ -2565,6 +2669,9 @@ fn cmd_vram_store(rasterizer: &mut Rasterizer, params: &[u32]) {
     let (width, height) = vram_access_dimensions(dim, false);
 
     rasterizer.tex_mapper.cache_invalidate();
+    
+    // Invalidate the enhanced cache for the store region
+    rasterizer.gpu_cache.invalidate_region(left, top, width as u16, height as u16);
 
     let store = VRamStore::new(left, top, width as u16, height as u16);
 
@@ -2606,6 +2713,9 @@ fn cmd_fill_rect(rasterizer: &mut Rasterizer, params: &[u32]) {
 
     // XXX Pretty sure there's no dithering for this commands
     let color = rasterizer.truncate_color(color);
+
+    // Invalidate cache for the fill area
+    rasterizer.gpu_cache.invalidate_region(start_x, start_y, width, height);
 
     for y in 0..height {
         let y_pos = (start_y + y) & 511;

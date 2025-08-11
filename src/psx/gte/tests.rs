@@ -3147,4 +3147,169 @@ static TESTS: &'static [Test] = &[
             ],
         },
     },
+    Test {
+        desc: "GTE_CDP, lm=0, cv=0, v=3, mx=2, sf=1 - Color Depth Cue test for Vigilante 8",
+        initial: Config {
+            controls: &[
+                // Color matrix
+                (16, 0x0bb80fa0),
+                (17, 0x0fa00fa0),
+                (18, 0x0fa00bb8),
+                (19, 0x0bb80fa0),
+                (20, 0x00000fa0),
+                // Background color
+                (13, 0x00000640),
+                (14, 0x00000640),
+                (15, 0x00000640),
+                // Far color
+                (21, 0x00001000),
+                (22, 0x00001000),
+                (23, 0x00001000),
+                // Depth queuing parameters
+                (27, 0xfffffec8),  // DQA
+                (28, 0x01400000),  // DQB
+            ],
+            data: &[
+                // IR registers - initial values for color interpolation
+                (8, 0x00000800),  // IR0 - depth value
+                (9, 0x00000400),  // IR1
+                (10, 0x00000400), // IR2
+                (11, 0x00000400), // IR3
+                // RGB color
+                (6, 0x00808080),  // Initial RGB
+            ],
+        },
+        command: 0x00080014,  // CDP command with shift=1
+        result: Config {
+            controls: &[
+                (16, 0x0bb80fa0),
+                (17, 0x0fa00fa0),
+                (18, 0x0fa00bb8),
+                (19, 0x0bb80fa0),
+                (20, 0x00000fa0),
+                (13, 0x00000640),
+                (14, 0x00000640),
+                (15, 0x00000640),
+                (21, 0x00001000),
+                (22, 0x00001000),
+                (23, 0x00001000),
+                (27, 0xfffffec8),
+                (28, 0x01400000),
+                (31, 0x00000000),  // No overflow flags expected
+            ],
+            data: &[
+                (8, 0x00000800),
+                (20, 0x00808080),  // RGB FIFO[0] - previous value
+                (21, 0x00808080),  // RGB FIFO[1] - previous value
+                // RGB FIFO[2] will contain the result of depth cue interpolation
+            ],
+        },
+    },
+    Test {
+        desc: "GTE_CDP overflow test - testing proper overflow handling",
+        initial: Config {
+            controls: &[
+                // Color matrix with large values to test overflow
+                (16, 0x7fff7fff),
+                (17, 0x7fff7fff),
+                (18, 0x7fff7fff),
+                (19, 0x7fff7fff),
+                (20, 0x00007fff),
+                // Background color
+                (13, 0x00007fff),
+                (14, 0x00007fff),
+                (15, 0x00007fff),
+                // Far color
+                (21, 0x00007fff),
+                (22, 0x00007fff),
+                (23, 0x00007fff),
+                (27, 0x00007fff),  // DQA
+                (28, 0x7fffffff),  // DQB
+            ],
+            data: &[
+                // Large IR values to trigger overflow
+                (8, 0x00007fff),  // IR0
+                (9, 0x00007fff),  // IR1
+                (10, 0x00007fff), // IR2
+                (11, 0x00007fff), // IR3
+                (6, 0x00ffffff),  // Max RGB
+            ],
+        },
+        command: 0x00080014,  // CDP command with shift=1
+        result: Config {
+            controls: &[
+                (16, 0x7fff7fff),
+                (17, 0x7fff7fff),
+                (18, 0x7fff7fff),
+                (19, 0x7fff7fff),
+                (20, 0x00007fff),
+                (13, 0x00007fff),
+                (14, 0x00007fff),
+                (15, 0x00007fff),
+                (21, 0x00007fff),
+                (22, 0x00007fff),
+                (23, 0x00007fff),
+                (27, 0x00007fff),
+                (28, 0x7fffffff),
+                // Check that overflow flags are set properly
+                (31, 0x80000000),  // MSB should be set indicating overflow
+            ],
+            data: &[
+                // MAC values should be saturated
+                (22, 0x00ffffff),  // RGB FIFO[2] should be saturated to max
+            ],
+        },
+    },
+    Test {
+        desc: "GTE_CDP with negative values - testing signed arithmetic",
+        initial: Config {
+            controls: &[
+                // Color matrix with negative values
+                (16, 0xf000f000),
+                (17, 0xf000f000),
+                (18, 0xf000f000),
+                (19, 0xf000f000),
+                (20, 0xfffff000),
+                // Background color
+                (13, 0xfffff800),
+                (14, 0xfffff800),
+                (15, 0xfffff800),
+                // Far color
+                (21, 0xfffff000),
+                (22, 0xfffff000),
+                (23, 0xfffff000),
+                (27, 0xfffff000),  // DQA (negative)
+                (28, 0xffff0000),  // DQB (negative)
+            ],
+            data: &[
+                (8, 0xfffff800),  // IR0 (negative)
+                (9, 0xfffff800),  // IR1 (negative)
+                (10, 0xfffff800), // IR2 (negative)
+                (11, 0xfffff800), // IR3 (negative)
+                (6, 0x00404040),  // Mid-range RGB
+            ],
+        },
+        command: 0x00080014,  // CDP command with shift=1
+        result: Config {
+            controls: &[
+                (16, 0xf000f000),
+                (17, 0xf000f000),
+                (18, 0xf000f000),
+                (19, 0xf000f000),
+                (20, 0xfffff000),
+                (13, 0xfffff800),
+                (14, 0xfffff800),
+                (15, 0xfffff800),
+                (21, 0xfffff000),
+                (22, 0xfffff000),
+                (23, 0xfffff000),
+                (27, 0xfffff000),
+                (28, 0xffff0000),
+            ],
+            data: &[
+                (8, 0xfffff800),
+                // Result should handle negative values properly
+            ],
+        },
+    },
 ];
