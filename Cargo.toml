@@ -13,6 +13,10 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
+netplay = ["tokio", "quinn", "webrtc", "igd"]
+fightcade = ["netplay"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -82,12 +86,6 @@ features = [
   "GamepadButton",
 ]
 
-[features]
-default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
-online-sync = ["reqwest", "tokio", "compatibility-db"]
-netplay = ["tokio", "quinn", "webrtc", "igd"]
-fightcade = ["netplay"]
 
 [profile.release]
 opt-level = "s"

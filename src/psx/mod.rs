@@ -17,6 +17,7 @@ mod cache;
 mod dma;
 mod expansion;
 pub mod gpu;
+pub mod ggpo;
 mod gte;
 mod irq;
 mod link_cable;
@@ -92,6 +93,9 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// GGPO netplay session (not serialized)
+    #[serde(skip)]
+    ggpo_session: Option<ggpo::GgpoSession>,
 }
 
 impl Psx {
@@ -146,6 +150,7 @@ impl Psx {
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            ggpo_session: None,
         })
     }
 
@@ -659,6 +664,176 @@ impl Psx {
 
     fn set_cpu_stalled_for_dma(&mut self, stalled: bool) {
         self.cpu_stalled_for_dma = stalled;
+    }
+
+    /// Initialize GGPO netplay session
+    pub fn init_netplay(&mut self, config: ggpo::NetplayConfig) -> Result<()> {
+        let session = ggpo::GgpoSession::new(config)?;
+        self.ggpo_session = Some(session);
+        Ok(())
+    }
+
+    /// Connect to netplay session
+    pub async fn connect_netplay(&mut self) -> Result<()> {
+        if let Some(ref mut session) = self.ggpo_session {
+            session.connect().await?;
+        }
+        Ok(())
+    }
+
+    /// Process netplay frame
+    pub fn process_netplay_frame(&mut self, local_input: u32) -> Result<()> {
+        if let Some(ref mut session) = self.ggpo_session {
+            let input_frame = ggpo::InputFrame {
+                frame: session.get_current_frame(),
+                player_id: 1,
+                buttons: local_input,
+                analog_left_x: 128,
+                analog_left_y: 128,
+                analog_right_x: 128,
+                analog_right_y: 128,
+                checksum: self.calculate_game_checksum(),
+            };
+
+            session.advance_frame(input_frame)?;
+
+            // Save current state for potential rollback
+            let state = self.create_save_state()?;
+            session.save_frame(state)?;
+        }
+        Ok(())
+    }
+
+    /// Create a save state for rollback
+    pub fn create_save_state(&self) -> Result<crate::save_state::SaveState> {
+        use crate::save_state::*;
+
+        let cpu_state = CpuState {
+            pc: self.cpu.pc(),
+            next_pc: self.cpu.next_pc(),
+            regs: self.cpu.regs(),
+            hi: self.cpu.hi(),
+            lo: self.cpu.lo(),
+            cop0_regs: self.cop0.regs(),
+            load_delay_slot: self.cpu.load_delay_slot(),
+            branch_delay: self.cpu.branch_delay(),
+            exception_pending: self.cpu.exception_pending(),
+        };
+
+        let gpu_state = GpuState {
+            vram: self.gpu.vram().to_vec(),
+            display_mode: self.gpu.display_mode(),
+            display_area: DisplayArea {
+                x: self.gpu.display_area_x(),
+                y: self.gpu.display_area_y(),
+                width: self.gpu.display_width(),
+                height: self.gpu.display_height(),
+            },
+            draw_area: DrawArea {
+                left: self.gpu.draw_area_left(),
+                top: self.gpu.draw_area_top(),
+                right: self.gpu.draw_area_right(),
+                bottom: self.gpu.draw_area_bottom(),
+            },
+            texture_window: TextureWindow {
+                mask_x: self.gpu.texture_window_mask_x(),
+                mask_y: self.gpu.texture_window_mask_y(),
+                offset_x: self.gpu.texture_window_offset_x(),
+                offset_y: self.gpu.texture_window_offset_y(),
+            },
+            draw_offset: self.gpu.draw_offset(),
+            mask_settings: self.gpu.mask_settings(),
+            status_register: self.gpu.status(),
+        };
+
+        let spu_state = SpuState {
+            voices: vec![],
+            control_register: self.spu.control_register(),
+            status_register: self.spu.status_register(),
+            reverb_settings: ReverbSettings::default(),
+            volume_left: self.spu.main_volume_left(),
+            volume_right: self.spu.main_volume_right(),
+            cd_volume_left: self.spu.cd_volume_left(),
+            cd_volume_right: self.spu.cd_volume_right(),
+            ram: self.spu.ram().to_vec(),
+        };
+
+        let memory_state = MemoryState {
+            main_ram: self.xmem.ram().to_vec(),
+            scratchpad: self.scratch_pad.data().to_vec(),
+            bios: self.xmem.bios().to_vec(),
+            memory_cards: [None, None],
+        };
+
+        let controller_state = ControllerState::default();
+
+        let timing_state = TimingState {
+            system_clock: self.cycle_counter as u64,
+            gpu_clock: 0,
+            spu_clock: 0,
+            timers: [TimerState::default(); 3],
+            frame_counter: 0,
+        };
+
+        let mut state = SaveState::new();
+        state.cpu_state = cpu_state;
+        state.gpu_state = gpu_state;
+        state.spu_state = spu_state;
+        state.memory_state = memory_state;
+        state.controller_state = controller_state;
+        state.timing_state = timing_state;
+
+        Ok(state)
+    }
+
+    /// Load a save state for rollback
+    pub fn load_save_state(&mut self, state: &crate::save_state::SaveState) -> Result<()> {
+        // Restore CPU state
+        self.cpu.set_pc(state.cpu_state.pc);
+        self.cpu.set_next_pc(state.cpu_state.next_pc);
+        self.cpu.set_regs(state.cpu_state.regs);
+        self.cpu.set_hi(state.cpu_state.hi);
+        self.cpu.set_lo(state.cpu_state.lo);
+        self.cop0.set_regs(state.cpu_state.cop0_regs);
+
+        // Restore memory
+        self.xmem.set_ram(&state.memory_state.main_ram);
+        self.scratch_pad.set_data(&state.memory_state.scratchpad);
+
+        // Restore timing
+        self.cycle_counter = state.timing_state.system_clock as CycleCount;
+
+        Ok(())
+    }
+
+    /// Calculate checksum for sync verification
+    fn calculate_game_checksum(&self) -> u32 {
+        use crc32fast::Hasher;
+        let mut hasher = Hasher::new();
+        
+        // Hash critical game state
+        hasher.update(&self.cpu.pc().to_le_bytes());
+        hasher.update(&self.cpu.regs()[0..8].iter().flat_map(|r| r.to_le_bytes()).collect::<Vec<_>>());
+        
+        hasher.finalize()
+    }
+
+    /// Disconnect netplay session
+    pub fn disconnect_netplay(&mut self) {
+        if let Some(ref mut session) = self.ggpo_session {
+            session.disconnect();
+        }
+        self.ggpo_session = None;
+    }
+
+    /// Check if netplay is active
+    pub fn is_netplay_active(&self) -> bool {
+        self.ggpo_session.is_some()
+    }
+
+    /// Get netplay statistics
+    pub fn get_netplay_stats(&self) -> Option<ggpo::network::NetworkStats> {
+        self.ggpo_session.as_ref().map(|s| s.get_network_stats())
     }
 }
 
