@@ -5,7 +5,7 @@ pub mod devices;
 use super::{irq, sync, AccessWidth, Addressable, CycleCount, Psx};
 use irq::Interrupt;
 
-use self::devices::Peripheral;
+use self::devices::{Peripheral, DeviceInterface};
 
 const PADSYNC: sync::SyncToken = sync::SyncToken::PadMemCard;
 
@@ -87,6 +87,46 @@ impl PadMemCard {
             transfer_state: TransferState::Idle,
         }
     }
+    
+    /// Reset the pad/memcard controller while preserving connected devices
+    pub fn reset(&mut self) {
+        // Save connected devices
+        let saved_pad1 = std::mem::replace(&mut self.pad1, devices::disconnected_gamepad());
+        let saved_pad2 = std::mem::replace(&mut self.pad2, devices::disconnected_gamepad());
+        let saved_memcard1 = std::mem::replace(&mut self.memcard1, devices::disconnected_memory_card());
+        let saved_memcard2 = std::mem::replace(&mut self.memcard2, devices::disconnected_memory_card());
+        
+        // Reset controller state
+        self.baud_div = 0;
+        self.mode = 0;
+        self.tx_en = false;
+        self.tx_pending = None;
+        self.select = false;
+        self.target = Target::PadMemCard1;
+        self.interrupt = false;
+        self.unknown = 0;
+        self.rx_en = false;
+        self.dsr_it = false;
+        self.response = 0xff;
+        self.rx_not_empty = false;
+        self.pad1_dsr = DsrState::Idle;
+        self.pad2_dsr = DsrState::Idle;
+        self.memcard1_dsr = DsrState::Idle;
+        self.memcard2_dsr = DsrState::Idle;
+        self.transfer_state = TransferState::Idle;
+        
+        // Restore connected devices
+        self.pad1 = saved_pad1;
+        self.pad2 = saved_pad2;
+        self.memcard1 = saved_memcard1;
+        self.memcard2 = saved_memcard2;
+        
+        // Notify devices of reconnection
+        self.pad1.device_mut().connected();
+        self.pad2.device_mut().connected();
+        self.memcard1.device_mut().connected();
+        self.memcard2.device_mut().connected();
+    }
 
     /// Return a mutable reference to the gamepad peripherals being used.
     pub fn gamepads_mut(&mut self) -> [&mut Peripheral; 2] {
@@ -101,6 +141,45 @@ impl PadMemCard {
     /// Return a mutable reference to the memory card peripherals being used.
     pub fn memory_cards_mut(&mut self) -> [&mut Peripheral; 2] {
         [&mut self.memcard1, &mut self.memcard2]
+    }
+    
+    /// Connect a memory card to the specified slot
+    pub fn connect_memory_card(&mut self, slot: usize, card: Box<dyn DeviceInterface>) {
+        match slot {
+            0 => {
+                self.memcard1.connect_device(card);
+                self.memcard1_dsr = DsrState::Idle;
+            }
+            1 => {
+                self.memcard2.connect_device(card);
+                self.memcard2_dsr = DsrState::Idle;
+            }
+            _ => panic!("Invalid memory card slot: {}", slot),
+        }
+    }
+    
+    /// Disconnect a memory card from the specified slot
+    pub fn disconnect_memory_card(&mut self, slot: usize) -> Box<dyn DeviceInterface> {
+        match slot {
+            0 => {
+                self.memcard1_dsr = DsrState::Idle;
+                self.memcard1.disconnect_device()
+            }
+            1 => {
+                self.memcard2_dsr = DsrState::Idle;
+                self.memcard2.disconnect_device()
+            }
+            _ => panic!("Invalid memory card slot: {}", slot),
+        }
+    }
+    
+    /// Check if a memory card is connected to the specified slot
+    pub fn is_memory_card_connected(&self, slot: usize) -> bool {
+        match slot {
+            0 => !matches!(self.memcard1.device().description().as_str(), "Disconnected"),
+            1 => !matches!(self.memcard2.device().description().as_str(), "Disconnected"),
+            _ => false,
+        }
     }
 
     fn maybe_exchange_byte(&mut self) {
