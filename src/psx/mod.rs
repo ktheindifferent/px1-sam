@@ -32,6 +32,10 @@ mod sync;
 mod timers;
 mod xmem;
 
+// ARM-specific optimizations
+#[cfg(target_arch = "aarch64")]
+pub mod arm_optimizer;
+
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
@@ -92,6 +96,10 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// ARM optimization system (not serialized)
+    #[cfg(target_arch = "aarch64")]
+    #[serde(skip)]
+    arm_optimizer: arm_optimizer::ArmOptimizer,
 }
 
 impl Psx {
@@ -146,6 +154,12 @@ impl Psx {
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            #[cfg(target_arch = "aarch64")]
+            arm_optimizer: {
+                let mut optimizer = arm_optimizer::ArmOptimizer::new();
+                optimizer.initialize();
+                optimizer
+            },
         })
     }
 
