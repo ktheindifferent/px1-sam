@@ -8,6 +8,9 @@ use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
 use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
 
+// Re-export ColorDepth for use in rasterizer
+use self::ColorDepth;
+
 const GPUSYNC: sync::SyncToken = sync::SyncToken::Gpu;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1007,18 +1010,29 @@ impl TextureWindow {
 
 /// Wrapper around the Display Mode register value (set by GP1[0x08])
 #[derive(serde::Serialize, serde::Deserialize, Copy, Clone)]
-struct DisplayMode(u32);
+pub struct DisplayMode(u32);
 
 impl DisplayMode {
-    fn new() -> DisplayMode {
+    pub fn new() -> DisplayMode {
         DisplayMode(0)
     }
 
-    fn set(&mut self, mode: u32) {
+    pub fn set(&mut self, mode: u32) {
         self.0 = mode
     }
 
-    fn standard(self) -> VideoStandard {
+    /// Create a DisplayMode with a specific color depth
+    pub fn with_color_depth(depth: ColorDepth) -> DisplayMode {
+        let bits = match depth {
+            ColorDepth::Bpp15 => 0,          // Bit 7=0, Bit 4=0
+            ColorDepth::Bpp24 => 1 << 4,     // Bit 7=0, Bit 4=1
+            ColorDepth::Bpp8 => 1 << 7,      // Bit 7=1, Bit 4=0
+            ColorDepth::Bpp4 => (1 << 7) | (1 << 4), // Bit 7=1, Bit 4=1
+        };
+        DisplayMode(bits)
+    }
+
+    pub fn standard(self) -> VideoStandard {
         if self.0 & (1 << 3) != 0 {
             VideoStandard::Pal
         } else {
@@ -1026,7 +1040,7 @@ impl DisplayMode {
         }
     }
 
-    fn is_interlaced(self) -> bool {
+    pub fn is_interlaced(self) -> bool {
         self.0 & (1 << 5) != 0
     }
 
@@ -1035,7 +1049,7 @@ impl DisplayMode {
     /// you also need to set bit 2 in Display Mode to actually tell the console to use two fields
     /// in VRAM. Without it the console sends the same data for the top and bottom fields, which is
     /// fairly useless.
-    fn is_true_interlaced(self) -> bool {
+    pub fn is_true_interlaced(self) -> bool {
         let two_fields = self.0 & (1 << 2) != 0;
 
         self.is_interlaced() && two_fields
@@ -1044,7 +1058,7 @@ impl DisplayMode {
     /// Retrieve the approximate horizontal resolution of the active video. This is an
     /// approximation because it will also depend on the timing configuration of the output (column
     /// start/column end etc...).
-    fn xres(self) -> u16 {
+    pub fn xres(self) -> u16 {
         if (self.0 & (1 << 6)) != 0 {
             368
         } else {
@@ -1059,9 +1073,41 @@ impl DisplayMode {
     }
 
     /// True if we output 24 bits per pixel
-    fn output_24bpp(self) -> bool {
+    pub fn output_24bpp(self) -> bool {
         self.0 & (1 << 4) != 0
     }
+
+    /// Get the color depth mode for display
+    /// Bits 4 and 7 control the color depth:
+    /// - Bit 4 = 0, Bit 7 = 0: 15bpp (default)
+    /// - Bit 4 = 1, Bit 7 = 0: 24bpp
+    /// - Bit 4 = 0, Bit 7 = 1: 8bpp (indexed)
+    /// - Bit 4 = 1, Bit 7 = 1: 4bpp (indexed)
+    pub fn color_depth(self) -> ColorDepth {
+        let bit4 = (self.0 >> 4) & 1;
+        let bit7 = (self.0 >> 7) & 1;
+        
+        match (bit7, bit4) {
+            (0, 0) => ColorDepth::Bpp15,
+            (0, 1) => ColorDepth::Bpp24,
+            (1, 0) => ColorDepth::Bpp8,
+            (1, 1) => ColorDepth::Bpp4,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// Color depth modes for display output
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ColorDepth {
+    /// 15bpp direct color (RGB555)
+    Bpp15,
+    /// 24bpp direct color  
+    Bpp24,
+    /// 8bpp indexed color (256 color palette)
+    Bpp8,
+    /// 4bpp indexed color (16 color palette)
+    Bpp4,
 }
 
 /// Wrapper around the Mask Setting register value (set by GP0[0xe6])

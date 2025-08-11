@@ -13,7 +13,7 @@ use crate::psx::gpu::commands::{TextureMode, TransparencyMode};
 use crate::psx::gpu::texture_cache::GpuCache;
 use crate::VRamDisplayMode;
 
-use crate::psx::gpu::{DisplayMode, DrawMode, MaskSettings, TextureWindow, TransparencyFunction};
+use crate::psx::gpu::{ColorDepth, DisplayMode, DrawMode, MaskSettings, TextureWindow, TransparencyFunction};
 use fixed_point::{FpCoord, FpVar};
 use serde::de::{self, Deserialize, Deserializer, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeTuple, Serializer};
@@ -422,45 +422,92 @@ impl Rasterizer {
 
         let width = min(self.cur_frame.width, xres);
 
-        if self.display_mode.output_24bpp() {
-            // GPU is in 24bpp mode, we need to do some bitwise magic to recreate the values
-            // correctly
+        match self.display_mode.color_depth() {
+            ColorDepth::Bpp24 => {
+                // GPU is in 24bpp mode, we need to do some bitwise magic to recreate the values
+                // correctly
 
-            // X position in the framebuffer, in Byte
-            let mut fb_x = (x_start * 2) as i32;
+                // X position in the framebuffer, in Byte
+                let mut fb_x = (x_start * 2) as i32;
 
-            for x in 0..width {
-                // We need two consecutive pixels
-                let p_x = fb_x >> 1;
-                let p1 = self.read_pixel(p_x, vram_y);
-                let p2 = self.read_pixel((p_x + 1) & 0x3ff, vram_y);
-
-                let p1 = p1.to_mbgr1555() as u32;
-                let p2 = p2.to_mbgr1555() as u32;
-
-                // Reassemble 32bit word
-                let mut p = p1 | (p2 << 16);
-
-                // Realign
-                p >>= (fb_x & 1) * 8;
-                p &= 0xff_ff_ff;
-
-                // Convert from BGR to RGB
-                let mut out = p & 0x00_ff_00;
-                out |= p >> 16;
-                out |= p << 16;
-
-                self.cur_frame.set_pixel(x, frame_y, out);
-
-                fb_x = (fb_x + 3) & 0x7ff;
-            }
-        } else {
-            // GPU outputs pixels "normally", 15bpp native
-            for y in 0..(1i32 << self.vram.upscale_shift) {
                 for x in 0..width {
-                    let p = self.read_pixel((x_start + x) as i32, vram_y + y);
-                    self.cur_frame
-                        .set_pixel(x, frame_y + (y as u32), p.to_rgb888());
+                    // We need two consecutive pixels
+                    let p_x = fb_x >> 1;
+                    let p1 = self.read_pixel(p_x, vram_y);
+                    let p2 = self.read_pixel((p_x + 1) & 0x3ff, vram_y);
+
+                    let p1 = p1.to_mbgr1555() as u32;
+                    let p2 = p2.to_mbgr1555() as u32;
+
+                    // Reassemble 32bit word
+                    let mut p = p1 | (p2 << 16);
+
+                    // Realign
+                    p >>= (fb_x & 1) * 8;
+                    p &= 0xff_ff_ff;
+
+                    // Convert from BGR to RGB
+                    let mut out = p & 0x00_ff_00;
+                    out |= p >> 16;
+                    out |= p << 16;
+
+                    self.cur_frame.set_pixel(x, frame_y, out);
+
+                    fb_x = (fb_x + 3) & 0x7ff;
+                }
+            }
+            ColorDepth::Bpp8 => {
+                // 8bpp indexed color mode - each byte in VRAM is a palette index
+                for y in 0..(1i32 << self.vram.upscale_shift) {
+                    for x in 0..width {
+                        // Calculate VRAM pixel position (2 texels per pixel in 8bpp)
+                        let vram_x = (x_start + x) >> 1;
+                        let pixel = self.read_pixel(vram_x as i32, vram_y + y);
+                        let pixel_bytes = pixel.vram_bytes();
+                        
+                        // Get the correct byte based on whether we want even or odd texel
+                        let palette_index = pixel_bytes[(x & 1) as usize];
+                        
+                        // Read palette entry from CLUT at default location (0, 0)
+                        // In full VRAM display modes, we read the palette from coordinates (0, 0)
+                        let clut_x = (palette_index & 0xf) as i32;
+                        let clut_y = (palette_index >> 4) as i32;
+                        let color = self.read_pixel(clut_x, clut_y);
+                        
+                        self.cur_frame.set_pixel(x, frame_y + (y as u32), color.to_rgb888());
+                    }
+                }
+            }
+            ColorDepth::Bpp4 => {
+                // 4bpp indexed color mode - each nibble in VRAM is a palette index
+                for y in 0..(1i32 << self.vram.upscale_shift) {
+                    for x in 0..width {
+                        // Calculate VRAM pixel position (4 texels per pixel in 4bpp)
+                        let vram_x = (x_start + x) >> 2;
+                        let pixel = self.read_pixel(vram_x as i32, vram_y + y);
+                        let pixel_value = pixel.to_mbgr1555();
+                        
+                        // Get the correct nibble based on position
+                        let nibble_pos = (x & 3) as u32;
+                        let shift = nibble_pos * 4;
+                        let palette_index = ((pixel_value >> shift) & 0xf) as i32;
+                        
+                        // Read palette entry from CLUT at default location
+                        // 16-color palette is typically stored in first 16 pixels
+                        let color = self.read_pixel(palette_index, 0);
+                        
+                        self.cur_frame.set_pixel(x, frame_y + (y as u32), color.to_rgb888());
+                    }
+                }
+            }
+            ColorDepth::Bpp15 => {
+                // GPU outputs pixels "normally", 15bpp native
+                for y in 0..(1i32 << self.vram.upscale_shift) {
+                    for x in 0..width {
+                        let p = self.read_pixel((x_start + x) as i32, vram_y + y);
+                        self.cur_frame
+                            .set_pixel(x, frame_y + (y as u32), p.to_rgb888());
+                    }
                 }
             }
         }
@@ -541,25 +588,46 @@ impl Rasterizer {
                                     self.vram.native_pixel(x, y).to_rgb888()
                                 }
                                 VRamDisplayMode::Full8bpp => {
-                                    let p = self.vram.native_pixel(x >> 1, y).vram_bytes();
-
-                                    let g = p[usize::from(x & 1)];
-
-                                    Pixel::from_rgb(g, g, g).0
+                                    // In full VRAM 8bpp mode, show indexed colors if display mode is 8bpp
+                                    if self.display_mode.color_depth() == ColorDepth::Bpp8 {
+                                        let p = self.vram.native_pixel(x >> 1, y).vram_bytes();
+                                        let palette_index = p[usize::from(x & 1)];
+                                        
+                                        // Read palette from CLUT (256 color palette at 0,0)
+                                        let clut_x = (palette_index & 0xf) as u16;
+                                        let clut_y = (palette_index >> 4) as u16;
+                                        self.vram.native_pixel(clut_x, clut_y).to_rgb888()
+                                    } else {
+                                        // Fallback to grayscale visualization
+                                        let p = self.vram.native_pixel(x >> 1, y).vram_bytes();
+                                        let g = p[usize::from(x & 1)];
+                                        Pixel::from_rgb(g, g, g).0
+                                    }
                                 }
                                 VRamDisplayMode::Full4bpp => {
-                                    let p = self.vram.native_pixel(x >> 2, y).to_mbgr1555();
-                                    let n = [
-                                        (p & 0xf) as u8,
-                                        ((p >> 4) & 0xf) as u8,
-                                        ((p >> 8) & 0xf) as u8,
-                                        ((p >> 12) & 0xf) as u8,
-                                    ];
+                                    // In full VRAM 4bpp mode, show indexed colors if display mode is 4bpp
+                                    if self.display_mode.color_depth() == ColorDepth::Bpp4 {
+                                        let p = self.vram.native_pixel(x >> 2, y).to_mbgr1555();
+                                        let nibble_pos = x & 3;
+                                        let shift = nibble_pos * 4;
+                                        let palette_index = ((p >> shift) & 0xf) as u16;
+                                        
+                                        // Read palette from CLUT (16 color palette at 0,0)
+                                        self.vram.native_pixel(palette_index, 0).to_rgb888()
+                                    } else {
+                                        // Fallback to grayscale visualization
+                                        let p = self.vram.native_pixel(x >> 2, y).to_mbgr1555();
+                                        let n = [
+                                            (p & 0xf) as u8,
+                                            ((p >> 4) & 0xf) as u8,
+                                            ((p >> 8) & 0xf) as u8,
+                                            ((p >> 12) & 0xf) as u8,
+                                        ];
 
-                                    let g = n[usize::from(x & 3)];
-                                    let g = g | g << 4;
-
-                                    Pixel::from_rgb(g, g, g).0
+                                        let g = n[usize::from(x & 3)];
+                                        let g = g | g << 4;
+                                        Pixel::from_rgb(g, g, g).0
+                                    }
                                 }
                             };
                         }
@@ -1939,6 +2007,12 @@ impl Pixel {
         let b = (self.blue() >> 3) as u16;
 
         (m << 15) | (b << 10) | (g << 5) | r
+    }
+
+    /// Get the raw bytes of the pixel as stored in VRAM (little-endian)
+    pub fn vram_bytes(self) -> [u8; 2] {
+        let val = self.to_mbgr1555();
+        [val as u8, (val >> 8) as u8]
     }
 
     pub fn red(self) -> u8 {
