@@ -59,6 +59,9 @@ mod sha;
 pub mod compatibility;
 #[cfg(feature = "compatibility-db")]
 mod compatibility_integration;
+#[cfg(feature = "discord-rpc")]
+pub mod discord_rpc;
+mod discord_integration;
 
 use crate::sha::sha256;
 use box_array::BoxArray;

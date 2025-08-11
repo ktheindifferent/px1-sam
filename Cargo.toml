@@ -13,6 +13,7 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -27,7 +28,7 @@ arrayvec = "0.7"
 lazy_static = "1.4"
 rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
-uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+uuid = { version = "1.6", features = ["v4", "serde"] }
 reqwest = { version = "0.11", features = ["json"], optional = true }
 tokio = { version = "1", features = ["rt", "macros"], optional = true }
 
@@ -45,6 +46,9 @@ spirv-reflect = { version = "0.2", optional = true }
 
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
+
+# Discord Rich Presence dependencies
+discord-rich-presence = { version = "0.2", optional = true }
 
 [dependencies.web-sys]
 version = "0.3"
@@ -70,7 +74,7 @@ features = [
 
 [features]
 default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
+compatibility-db = ["rusqlite", "chrono"]
 online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [profile.release]
