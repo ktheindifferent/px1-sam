@@ -2,9 +2,188 @@
 // Based on the full rustation-ng architecture
 
 use super::error::{PsxError, Result};
-use crate::bios_hle::{BiosHle, BiosContext};
-use crate::spu::Spu;
-use crate::cdrom::CdRom;
+// Stub implementations for missing modules
+
+// Addressable trait for memory access
+trait Addressable: Sized {
+    fn from_u32(val: u32) -> Self;
+    fn as_u32(self) -> u32;
+}
+
+impl Addressable for u8 {
+    fn from_u32(val: u32) -> Self { val as u8 }
+    fn as_u32(self) -> u32 { self as u32 }
+}
+
+impl Addressable for u16 {
+    fn from_u32(val: u32) -> Self { val as u16 }
+    fn as_u32(self) -> u32 { self as u32 }
+}
+
+impl Addressable for u32 {
+    fn from_u32(val: u32) -> Self { val }
+    fn as_u32(self) -> u32 { self }
+}
+
+// SPU (Sound Processing Unit) stub
+pub struct Spu {
+    ram: [u8; 512 * 1024],  // 512KB SPU RAM
+    voices: [Voice; 24],     // 24 voices
+    volume_left: u16,
+    volume_right: u16,
+}
+
+impl Spu {
+    pub fn new() -> Self {
+        Spu {
+            ram: [0; 512 * 1024],
+            voices: [Voice::new(); 24],
+            volume_left: 0,
+            volume_right: 0,
+        }
+    }
+    
+    pub fn reset(&mut self) {
+        self.ram = [0; 512 * 1024];
+        self.voices = [Voice::new(); 24];
+        self.volume_left = 0;
+        self.volume_right = 0;
+    }
+    
+    pub fn load<T: Addressable>(&self, _offset: u32) -> T {
+        Addressable::from_u32(0)
+    }
+    
+    pub fn store<T: Addressable>(&mut self, _offset: u32, _val: T) {}
+    
+    pub fn sync(&mut self, _cycles: CycleCount) {}
+    
+    pub fn read_register(&self, _offset: u32) -> u16 {
+        0
+    }
+    
+    pub fn write_register(&mut self, _offset: u32, _val: u16) {}
+}
+
+#[derive(Clone, Copy)]
+struct Voice {
+    volume_left: u16,
+    volume_right: u16,
+}
+
+impl Voice {
+    fn new() -> Self {
+        Voice {
+            volume_left: 0,
+            volume_right: 0,
+        }
+    }
+}
+
+// CD-ROM stub
+pub struct CdRom {
+    status: u8,
+    interrupt_enable: u8,
+    interrupt_flag: u8,
+}
+
+impl CdRom {
+    pub fn new() -> Self {
+        CdRom {
+            status: 0x18,  // Shell open, motor off
+            interrupt_enable: 0,
+            interrupt_flag: 0,
+        }
+    }
+    
+    pub fn reset(&mut self) {
+        self.status = 0x18;
+        self.interrupt_enable = 0;
+        self.interrupt_flag = 0;
+    }
+    
+    pub fn insert_disc(&mut self, _tracks: u32) {
+        self.status = 0x10;  // Shell closed
+    }
+    
+    pub fn step(&mut self, _cycles: u32) {}
+    
+    pub fn has_interrupt(&self) -> bool {
+        (self.interrupt_flag & self.interrupt_enable) != 0
+    }
+    
+    pub fn acknowledge_interrupt(&mut self) {
+        self.interrupt_flag = 0;
+    }
+    
+    pub fn read_register(&self, _offset: u32) -> u8 {
+        match _offset & 3 {
+            0 => self.status,
+            1 => 0,  // Response FIFO
+            2 => 0,  // Data FIFO
+            3 => self.interrupt_enable | self.interrupt_flag,
+            _ => 0,
+        }
+    }
+    
+    pub fn write_register(&mut self, offset: u32, val: u8) {
+        match offset & 3 {
+            0 => {},  // Index/Status register
+            1 => {},  // Command register
+            2 => {},  // Parameter FIFO
+            3 => {
+                self.interrupt_enable = val & 0x1f;
+                self.interrupt_flag &= !(val & 0x40);
+            },
+            _ => {},
+        }
+    }
+    
+    pub fn load<T: Addressable>(&self, _offset: u32) -> T {
+        Addressable::from_u32(0)
+    }
+    
+    pub fn store<T: Addressable>(&mut self, _offset: u32, _val: T) {}
+    
+    pub fn sync(&mut self, _cycles: CycleCount) {}
+}
+
+// HLE BIOS stub
+pub struct BiosHle {
+    functions: Vec<BiosFunction>,
+}
+
+impl BiosHle {
+    pub fn new() -> Self {
+        BiosHle {
+            functions: Vec::new(),
+        }
+    }
+    
+    pub fn handle_call(&mut self, _pc: u32, _cpu: &mut Cpu) -> bool {
+        false  // Not handled
+    }
+    
+    pub fn handle_syscall(&mut self, _ctx: &mut BiosContext, _function: u32, _table: u32) -> bool {
+        // Basic syscall handling stub
+        false
+    }
+}
+
+struct BiosFunction {
+    address: u32,
+    name: String,
+}
+
+// BIOS context for HLE calls
+pub struct BiosContext {
+    pub pc: u32,
+    pub r: [u32; 32],
+    pub hi: u32,
+    pub lo: u32,
+    pub regs: [u32; 32],  // CPU registers
+    pub ram: Vec<u8>,     // RAM copy for HLE
+}
 
 // Constants
 const CPU_FREQ_HZ: u32 = 33_868_800;
@@ -960,7 +1139,7 @@ impl Gte {
         let mac3 = (vz * ((self.control[2] as i16) as i32)) >> 12;
         
         // Store results
-        self.data[25] = (((mac1 as u32) & 0xffff) | (((mac2 as u32) & 0xffff) << 16));
+        self.data[25] = ((mac1 as u32) & 0xffff) | (((mac2 as u32) & 0xffff) << 16);
         self.data[26] = (mac3 as u32) & 0xffff;
     }
     
@@ -2410,17 +2589,19 @@ impl Psx {
                     let table = self.cpu.pc & 0xff;
                     
                     let mut ctx = BiosContext {
+                        pc: self.cpu.pc,
+                        r: self.cpu.regs.clone(),
+                        hi: self.cpu.hi,
+                        lo: self.cpu.lo,
                         regs: self.cpu.regs.clone(),
                         ram: self.ram.clone(),
-                        pc: self.cpu.pc,
                     };
                     
-                    let result = self.bios_hle.handle_syscall(&mut ctx, function, table);
+                    let _result = self.bios_hle.handle_syscall(&mut ctx, function, table);
                     
                     // Update registers from context
                     self.cpu.regs = ctx.regs;
                     self.ram = ctx.ram;
-                    self.cpu.regs[2] = result; // v0 - return value
                 } else {
                     // Trigger syscall exception
                     let handler = self.cop0.exception(Exception::Syscall, self.cpu.current_pc, false);
