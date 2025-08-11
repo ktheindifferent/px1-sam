@@ -9,6 +9,8 @@ use serde::ser::{Serialize, Serializer};
 use std::fmt;
 
 mod cache;
+pub mod advanced_cache;
+pub mod advanced_cache_wasm;
 
 /// PlayStation disc.
 ///
