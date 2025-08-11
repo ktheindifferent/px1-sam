@@ -654,13 +654,31 @@ fn cmd_vram_copy(psx: &mut Psx) {
     // Pop command
     psx.gpu.command_pop_to_rasterizer();
     // Source position in VRAM
+    let src_pos = psx.gpu.command_fifo.peek();
     psx.gpu.command_pop_to_rasterizer();
     // Target position in VRAM
+    let dst_pos = psx.gpu.command_fifo.peek();
     psx.gpu.command_pop_to_rasterizer();
     // Dimensions
     let dim = psx.gpu.command_pop_to_rasterizer();
 
     let (width, height) = vram_access_dimensions(dim, false);
+    
+    // Check bounds for both source and destination
+    let src_x = (src_pos & 0x3ff) as i32;
+    let src_y = ((src_pos >> 16) & 0x1ff) as i32;
+    let dst_x = (dst_pos & 0x3ff) as i32;
+    let dst_y = ((dst_pos >> 16) & 0x1ff) as i32;
+    
+    if let Err(error) = super::error_handler::check_vram_bounds(src_x, src_y, width, height) {
+        super::error_handler::report_gpu_error(error);
+        // Continue with clamped values
+    }
+    
+    if let Err(error) = super::error_handler::check_vram_bounds(dst_x, dst_y, width, height) {
+        super::error_handler::report_gpu_error(error);
+        // Continue with clamped values
+    }
 
     let duration = width * height * 2;
     psx.gpu.draw_time(duration as CycleCount);
@@ -670,9 +688,20 @@ fn cmd_vram_store(psx: &mut Psx) {
     // Pop command
     psx.gpu.command_pop_to_rasterizer();
     // Position in VRAM
+    let pos = psx.gpu.command_fifo.peek();
     psx.gpu.command_pop_to_rasterizer();
     // Dimensions
     let dim = psx.gpu.command_pop_to_rasterizer();
+    
+    let (width, height) = vram_access_dimensions(dim, false);
+    let x = (pos & 0x3ff) as i32;
+    let y = ((pos >> 16) & 0x1ff) as i32;
+    
+    // Check VRAM bounds
+    if let Err(error) = super::error_handler::check_vram_bounds(x, y, width, height) {
+        super::error_handler::report_gpu_error(error);
+        // Continue with clamped values
+    }
 
     let nwords = vram_access_length_words(dim, false);
     psx.gpu.state = State::VRamStore(nwords as u32);
@@ -682,9 +711,20 @@ fn cmd_vram_load(psx: &mut Psx) {
     // Pop command
     psx.gpu.command_pop_to_rasterizer();
     // Position in VRAM
+    let pos = psx.gpu.command_fifo.peek();
     psx.gpu.command_pop_to_rasterizer();
     // Dimensions
     let dim = psx.gpu.command_pop_to_rasterizer();
+    
+    let (width, height) = vram_access_dimensions(dim, true);
+    let x = (pos & 0x3ff) as i32;
+    let y = ((pos >> 16) & 0x1ff) as i32;
+    
+    // Check VRAM bounds
+    if let Err(error) = super::error_handler::check_vram_bounds(x, y, width, height) {
+        super::error_handler::report_gpu_error(error);
+        // Continue with clamped values
+    }
 
     let nwords = vram_access_length_words(dim, true);
     if nwords > 0 {
@@ -769,9 +809,36 @@ fn cmd_nop(psx: &mut Psx) {
     psx.gpu.command_fifo.pop();
 }
 
-/// Placeholder function
+/// Handle unimplemented GPU commands with proper error reporting
 fn cmd_unimplemented(psx: &mut Psx) {
-    warn!("GPU command {:08x}", psx.gpu.command_fifo.pop());
+    let command = psx.gpu.command_fifo.peek();
+    let opcode = (command >> 24) as u8;
+    
+    // Report the error to our error handler
+    let error = super::error_handler::GpuCommandError::Unimplemented { opcode, command };
+    let recovery = super::error_handler::report_gpu_error(error);
+    
+    // Handle recovery action
+    match recovery {
+        super::error_handler::ErrorRecoveryAction::Skip => {
+            // Pop and discard the command
+            psx.gpu.command_fifo.pop();
+            log::debug!("GPU: Skipped unimplemented command 0x{:02X}", opcode);
+        }
+        super::error_handler::ErrorRecoveryAction::SkipWithDefault(defaults) => {
+            // Pop the command and use defaults if needed
+            psx.gpu.command_fifo.pop();
+            // Defaults would be used if the command had side effects
+            log::debug!("GPU: Skipped unimplemented command 0x{:02X} with defaults", opcode);
+        }
+        super::error_handler::ErrorRecoveryAction::Fatal => {
+            panic!("GPU: Fatal error on unimplemented command 0x{:08X}", command);
+        }
+        _ => {
+            // Just pop and continue
+            psx.gpu.command_fifo.pop();
+        }
+    }
 }
 
 /// LUT for all GP0 commands (indexed by opcode, bits[31:24] of the first command word)

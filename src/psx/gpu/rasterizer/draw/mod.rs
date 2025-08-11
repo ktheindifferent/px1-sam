@@ -1758,7 +1758,16 @@ impl TextureMapper {
         let clut_x = ((clut & 0x3f) << 4) as u16;
         let clut_y = ((clut >> 6) & 0x1ff) as u16;
 
-        // let clut_off = (clut_y * 1024 + clut_x) as usize;
+        // Check CLUT bounds and report error if out of bounds
+        if clut_x >= 1024 || clut_y >= 512 {
+            // Report CLUT out of bounds error
+            use crate::psx::gpu::error_handler::{GpuCommandError, report_gpu_error};
+            let error = GpuCommandError::ClutOutOfBounds { x: clut_x, y: clut_y };
+            report_gpu_error(error);
+            
+            // Log for debugging (especially for Dino Crisis 2)
+            log::debug!("CLUT bounds fix: clut_x={}, clut_y={}, wrapping to valid range", clut_x, clut_y);
+        }
 
         // 256 for 8bpp, 16 for 4bpp
         let nentries = 256u16 >> ((pts - 1) * 4);
@@ -1767,10 +1776,14 @@ impl TextureMapper {
         //
         // clut_x = 1008, clut_y = 511, nentries = 256
         //
-        // Naturally this goes out of bounds, but I presume that we're supposed to wrap around (not
-        // tested on real hardware)
+        // This fix handles the out-of-bounds case by wrapping the X coordinate
+        // and clamping the Y coordinate to valid VRAM bounds
+        let clut_y_clamped = clut_y.min(511);
+        
         for i in 0..nentries {
-            self.clut_cache[i as usize] = vram.native_pixel((clut_x + i) & 0x3ff, clut_y)
+            // Wrap X coordinate to stay within VRAM bounds (0-1023)
+            // Y coordinate is clamped to valid range (0-511)
+            self.clut_cache[i as usize] = vram.native_pixel((clut_x + i) & 0x3ff, clut_y_clamped)
         }
     }
 
@@ -1918,6 +1931,21 @@ impl Pixel {
         let b = b as u32;
 
         Pixel(b | (g << 8) | (r << 16))
+    }
+    
+    /// Get red component
+    pub fn r(self) -> u8 {
+        ((self.0 >> 16) & 0xff) as u8
+    }
+    
+    /// Get green component
+    pub fn g(self) -> u8 {
+        ((self.0 >> 8) & 0xff) as u8
+    }
+    
+    /// Get blue component
+    pub fn b(self) -> u8 {
+        (self.0 & 0xff) as u8
     }
 
     fn from_command(cmd: u32) -> Pixel {
