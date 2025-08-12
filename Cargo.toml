@@ -186,6 +186,15 @@ num-complex = "0.4"
 hound = { version = "3.5", optional = true }
 rubato = "0.14"
 
+# Compression format dependencies
+lzma-rs = "0.3"
+crc = "3.0"
+byteorder = "1.5"
+memmap = "0.7"
+sevenz-rust = { version = "0.5", features = ["compress", "lzma", "lzma2"] }
+unrar = "0.5"
+sha1 = "0.10"
+
 [dev-dependencies]
 flexbuffers = "2.0"
 tempfile = "3.8"

@@ -1,5 +1,4 @@
 use super::iso9660;
-use super::chd;
 use super::libcrypt::{LibCrypt, SubchannelQ};
 use crate::error::{PsxError, Result};
 use crate::psx::gpu::VideoStandard;
@@ -10,6 +9,9 @@ use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
 use std::fmt;
 use std::path::Path;
+
+// Import advanced compression format support
+use super::formats;
 
 // Simple logging macro
 macro_rules! disc_log {
@@ -58,11 +60,67 @@ impl Disc {
         Ok(disc)
     }
 
-    /// Load a disc from a CHD file
-    pub fn from_chd<P: AsRef<Path>>(path: P) -> Result<Disc> {
+    /// Load a disc with automatic format detection
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Disc> {
         let path_ref = path.as_ref();
-        let image = chd::ChdImage::open(path_ref)?;
-        let mut disc = Self::new(Box::new(image))?;
+        
+        disc_log!("Loading disc image from: {:?}", path_ref);
+        
+        // Use automatic format detection
+        let format = formats::detect_format(path_ref)
+            .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?;
+        
+        disc_log!("Detected format: {:?}", format);
+        
+        // Load the image based on detected format
+        let image = formats::load_image(path_ref)
+            .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?;
+        
+        let mut disc = Self::new(image)?;
+        
+        // Try to auto-load SBI file for LibCrypt protection
+        if let Err(e) = disc.libcrypt.auto_load_sbi(path_ref) {
+            disc_log!("Failed to auto-load SBI file: {:?}", e);
+        }
+        
+        Ok(disc)
+    }
+    
+    /// Load a disc from a specific format
+    pub fn load_with_format<P: AsRef<Path>>(path: P, format: formats::CompressionFormat) -> Result<Disc> {
+        let path_ref = path.as_ref();
+        
+        disc_log!("Loading disc image as {:?} from: {:?}", format, path_ref);
+        
+        let image = match format {
+            formats::CompressionFormat::Chd => {
+                Box::new(formats::chd::ChdImage::open(path_ref)
+                    .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?) as Box<dyn Image + Send>
+            }
+            formats::CompressionFormat::Cso => {
+                Box::new(formats::cso::CsoImage::open(path_ref)
+                    .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?) as Box<dyn Image + Send>
+            }
+            formats::CompressionFormat::Pbp => {
+                Box::new(formats::pbp::PbpImage::open(path_ref)
+                    .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?) as Box<dyn Image + Send>
+            }
+            formats::CompressionFormat::Ecm => {
+                Box::new(formats::ecm::EcmImage::open(path_ref)
+                    .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?) as Box<dyn Image + Send>
+            }
+            formats::CompressionFormat::SplitArchive => {
+                formats::split_archive::load_from_archive(path_ref)
+                    .map_err(|e| PsxError::BadDiscFormat(e.to_string()))?
+            }
+            formats::CompressionFormat::Uncompressed => {
+                return Err(PsxError::BadDiscFormat(
+                    "Uncompressed format should use existing cdimage loader".to_string()
+                ));
+            }
+        };
+        
+        let mut disc = Self::new(image)?;
         
         // Try to auto-load SBI file
         if let Err(e) = disc.libcrypt.auto_load_sbi(path_ref) {
@@ -70,37 +128,6 @@ impl Disc {
         }
         
         Ok(disc)
-    }
-
-    /// Load a disc with CHD format detection and fallback support
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Disc> {
-        let path_ref = path.as_ref();
-        
-        // Check if it's a CHD file
-        if chd::is_chd_file(path_ref) {
-            disc_log!("Detected CHD format, loading CHD image");
-            
-            // Try to load CHD with fallback support
-            match Self::from_chd(path_ref) {
-                Ok(disc) => Ok(disc),
-                Err(e) => {
-                    disc_log!("Failed to load CHD file: {:?}", e);
-                    
-                    // Look for fallback BIN/CUE files
-                    let fallback_path = Self::find_fallback_image(path_ref);
-                    
-                    if let Some(fallback) = fallback_path {
-                        disc_log!("Attempting to load fallback image: {:?}", fallback);
-                        Self::load_fallback(fallback)
-                    } else {
-                        Err(e)
-                    }
-                }
-            }
-        } else {
-            // Try other formats
-            Self::load_fallback(path_ref.to_path_buf())
-        }
     }
     
     /// Find a fallback BIN/CUE file for a corrupted CHD
