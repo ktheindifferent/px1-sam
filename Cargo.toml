@@ -7,18 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 path = "src/wasm_unified.rs"
 
-[[bin]]
-name = "replay-harness"
-path = "src/bin/replay-harness.rs"
-
-[[bin]]
-name = "visual-test"
-path = "src/bin/visual-test.rs"
-
-[[bin]]
-name = "save-state-test"
-path = "src/bin/save-state-test.rs"
-
 [features]
 default = []
 pgxp = []
@@ -47,10 +35,10 @@ zip = "0.6"
 
 # Database and compatibility dependencies
 rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"], optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
-reqwest = { version = "0.11", features = ["json", "blocking"] }
-tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"] }
+reqwest = { version = "0.11", features = ["json", "blocking"], optional = true }
+tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"], optional = true }
 toml = "0.8"
 dirs = "5.0"
 
@@ -86,8 +74,21 @@ features = [
   "HtmlElement",
   "Window",
   "CanvasRenderingContext2d",
+  "WebGl2RenderingContext",
+  "WebGlProgram",
+  "WebGlShader",
+  "WebGlTexture",
+  "WebGlBuffer",
+  "WebGlUniformLocation",
   "ImageData",
   "KeyboardEvent",
+  "MouseEvent",
+  "TouchEvent",
+  "Touch",
+  "TouchList",
+  "PointerEvent",
+  "WheelEvent",
+  "GamepadEvent",
   "AudioContext",
   "AudioBuffer",
   "AudioBufferSourceNode",
@@ -96,8 +97,30 @@ features = [
   "BaseAudioContext",
   "Gamepad",
   "GamepadButton",
+  "Navigator",
+  "Performance",
+  "Storage",
+  "IdbDatabase",
+  "IdbObjectStore",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbFactory",
+  "ServiceWorkerRegistration",
+  "ServiceWorkerContainer",
+  "Worker",
+  "MessagePort",
+  "OffscreenCanvas",
+  "Blob",
+  "File",
+  "FileReader",
+  "Url",
+  "UrlSearchParams",
+  "Response",
+  "RequestInit",
+  "RequestMode",
+  "Headers",
+  "WorkerGlobalScope",
 ]
-
 
 [profile.release]
 opt-level = "s"
