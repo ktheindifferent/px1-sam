@@ -9,6 +9,8 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod crt_shaders;
+pub mod crt_shader_pipeline;
 pub mod frame_interpolation;
 pub mod crt_beam_renderer;
 
