@@ -24,7 +24,8 @@ optick = ["dep:optick"]
 discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
-streaming = ["ffmpeg-next", "opus", "x264", "librtmp", "websocket", "v4l", "cpal"]
+streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
+ai-frame-generation = ["ort", "ndarray", "half", "imageproc", "memmap2", "crossbeam"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -81,7 +82,7 @@ base64 = "0.21"
 
 
 # GGPO Netplay dependencies and Cloud sync
-ring = "0.17"
+ring = { version = "0.17", optional = true }
 quinn = { version = "0.10", optional = true }
 webrtc = { version = "0.9", optional = true }
 igd = { version = "0.12", optional = true }
@@ -130,11 +131,19 @@ discord-rich-presence = { version = "0.2", optional = true }
 # Streaming dependencies
 ffmpeg-next = { version = "6.0", optional = true }
 opus = { version = "0.3", optional = true }
-x264 = { version = "0.6", optional = true }
-librtmp = { version = "0.1", optional = true }
+x264 = { version = "0.5", optional = true }
+# librtmp = { version = "0.1", optional = true } # Not available on crates.io
 websocket = { version = "0.26", optional = true }
 v4l = { version = "0.14", optional = true }
 cpal = { version = "0.15", optional = true }
+
+# AI Frame Generation dependencies
+ort = { version = "2.0.0-rc.10", features = ["cuda", "tensorrt"], optional = true }
+ndarray = { version = "0.15", optional = true }
+half = { version = "2.3", features = ["serde"], optional = true }
+imageproc = { version = "0.23", optional = true }
+memmap2 = { version = "0.9", optional = true }
+crossbeam = { version = "0.8", optional = true }
 
 [dev-dependencies]
 flexbuffers = "2.0"

@@ -15,6 +15,7 @@ pub mod texture_upscaling;
 pub mod crt_shaders;
 pub mod crt_shader_pipeline;
 pub mod frame_interpolation;
+pub mod optical_flow;
 pub mod crt_beam_renderer;
 
 #[cfg(feature = "vulkan")]
@@ -37,6 +38,8 @@ mod rendering_test;
 mod shader_cache_test;
 #[cfg(test)]
 mod memory_prefetch_test;
+#[cfg(test)]
+mod frame_interpolation_tests;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
