@@ -25,6 +25,7 @@ discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "librtmp", "websocket", "v4l", "cpal"]
+cloud-gaming = ["webrtc", "tokio", "futures", "bytes", "rand", "stun_codec", "turn", "ice"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -135,6 +136,11 @@ librtmp = { version = "0.1", optional = true }
 websocket = { version = "0.26", optional = true }
 v4l = { version = "0.14", optional = true }
 cpal = { version = "0.15", optional = true }
+
+# Cloud Gaming dependencies
+turn = { version = "0.6", optional = true }
+ice = { version = "0.10", optional = true }
+rand = { version = "0.8", optional = true }
 
 [dev-dependencies]
 flexbuffers = "2.0"
