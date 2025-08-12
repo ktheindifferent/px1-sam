@@ -7,6 +7,10 @@ edition = "2021"
 crate-type = ["cdylib"]
 path = "src/wasm_unified.rs"
 
+[[bin]]
+name = "compress_games"
+path = "src/bin/compress_games.rs"
+
 [features]
 default = []
 pgxp = []
@@ -80,6 +84,11 @@ fastrand = "2.0"
 
 # Save state compression dependencies
 lz4 = "1.24"
+
+# Compression format dependencies
+lzma-rs = "0.3"
+xz2 = "0.1"
+sevenz-rust = { version = "0.5", optional = true }
 
 # Additional save state dependencies
 parking_lot = "0.12"
