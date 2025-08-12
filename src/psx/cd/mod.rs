@@ -7,6 +7,10 @@ pub mod iso9660;
 pub mod cache_overlay;
 pub mod cache_stats;
 pub mod libcrypt;
+pub mod cso;
+pub mod pbp;
+pub mod ecm;
+pub mod compression;
 
 use super::{irq, Addressable, Psx};
 use crate::error::{PsxError, Result};

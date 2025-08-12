@@ -1,6 +1,7 @@
 use super::iso9660;
 use super::chd;
 use super::libcrypt::{LibCrypt, SubchannelQ};
+use super::compression;
 use crate::error::{PsxError, Result};
 use crate::psx::gpu::VideoStandard;
 pub use cache::Cache as CdCache;
@@ -72,35 +73,26 @@ impl Disc {
         Ok(disc)
     }
 
-    /// Load a disc with CHD format detection and fallback support
+    /// Load a disc with automatic format detection and support for all compression formats
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Disc> {
         let path_ref = path.as_ref();
         
-        // Check if it's a CHD file
-        if chd::is_chd_file(path_ref) {
-            disc_log!("Detected CHD format, loading CHD image");
-            
-            // Try to load CHD with fallback support
-            match Self::from_chd(path_ref) {
-                Ok(disc) => Ok(disc),
-                Err(e) => {
-                    disc_log!("Failed to load CHD file: {:?}", e);
-                    
-                    // Look for fallback BIN/CUE files
-                    let fallback_path = Self::find_fallback_image(path_ref);
-                    
-                    if let Some(fallback) = fallback_path {
-                        disc_log!("Attempting to load fallback image: {:?}", fallback);
-                        Self::load_fallback(fallback)
-                    } else {
-                        Err(e)
-                    }
-                }
-            }
-        } else {
-            // Try other formats
-            Self::load_fallback(path_ref.to_path_buf())
+        // Use automatic format detection
+        let format = compression::detect_format(path_ref)?;
+        disc_log!("Detected format: {:?}", format);
+        
+        // Open the image using the compression module
+        let image = compression::open_image(path_ref)?;
+        
+        // Create disc from the image
+        let mut disc = Self::new(image)?;
+        
+        // Try to auto-load SBI file for LibCrypt protection
+        if let Err(e) = disc.libcrypt.auto_load_sbi(path_ref) {
+            disc_log!("No SBI file found or failed to load: {:?}", e);
         }
+        
+        Ok(disc)
     }
     
     /// Find a fallback BIN/CUE file for a corrupted CHD
