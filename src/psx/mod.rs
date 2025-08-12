@@ -31,6 +31,7 @@ mod spu;
 mod sync;
 mod timers;
 mod xmem;
+pub mod retroachievements;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
