@@ -13,6 +13,8 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+tracy = ["dep:tracy-client"]
+optick = ["dep:optick"]
 discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
@@ -72,12 +74,12 @@ spirv-reflect = { version = "0.2", optional = true }
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
 
+# External profiler dependencies
+tracy-client = { version = "0.16", optional = true }
+optick = { version = "1.3.4", optional = true }
+
 # Discord Rich Presence dependencies
 discord-rich-presence = { version = "0.2", optional = true }
-
-[dev-dependencies]
-flexbuffers = "2.0"
-tempfile = "3.8"
 
 [dependencies.web-sys]
 version = "0.3"

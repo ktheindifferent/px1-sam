@@ -11,6 +11,7 @@ pub mod shader_cache;
 pub mod shader_manager;
 pub mod crt_shaders;
 pub mod crt_shader_pipeline;
+pub mod frame_interpolation;
 pub mod crt_beam_renderer;
 
 #[cfg(feature = "vulkan")]
@@ -40,6 +41,7 @@ use crate::frame_pacing::FramePacer;
 pub use crate::frame_pacing::{DisplayMode, DisplayCapabilities, FramePacingStats};
 use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
 use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
 
 // Re-export ColorDepth for use in rasterizer
@@ -148,6 +150,8 @@ pub struct Gpu {
     frame_pacer: FramePacer,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// Clock multiplier for dynamic GPU clock scaling
+    pub clock_multiplier: f32,
     /// Revolutionary CRT beam simulation renderer
     crt_beam_renderer: Option<CrtBeamRenderer>,
     /// CRT beam configuration
@@ -204,6 +208,7 @@ impl Gpu {
             rendering_pipeline: RenderingPipeline::new(),
             frame_pacer: FramePacer::new(),
             shader_manager: None,
+            clock_multiplier: 1.0,
             crt_beam_renderer: None,
             crt_beam_config: CrtBeamConfig::default(),
         };

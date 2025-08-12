@@ -33,6 +33,9 @@ mod sync;
 mod timers;
 mod vram;
 mod xmem;
+pub mod power_management;
+pub mod framerate_controller;
+pub mod display_sync;
 pub mod retroachievements;
 
 // ARM-specific optimizations
@@ -105,6 +108,15 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// Dynamic power management system
+    #[serde(skip)]
+    pub power_management: Option<power_management::PowerManagement>,
+    /// Framerate controller
+    #[serde(skip)]
+    pub framerate_controller: Option<framerate_controller::FramerateController>,
+    /// Display synchronization
+    #[serde(skip)]
+    pub display_sync: Option<display_sync::DisplaySync>,
     /// ARM optimization system (not serialized)
     #[cfg(target_arch = "aarch64")]
     #[serde(skip)]
@@ -166,6 +178,9 @@ impl Psx {
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            power_management: Some(power_management::PowerManagement::new()),
+            framerate_controller: Some(framerate_controller::FramerateController::new()),
+            display_sync: Some(display_sync::DisplaySync::new()),
             #[cfg(target_arch = "aarch64")]
             arm_optimizer: {
                 let mut optimizer = arm_optimizer::ArmOptimizer::new();
@@ -244,6 +259,9 @@ impl Psx {
 
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
+        use std::time::Instant;
+        let frame_start = Instant::now();
+        
         self.frame_done = false;
         while !self.frame_done {
             // Process memory bus for this cycle
@@ -260,6 +278,26 @@ impl Psx {
             }
 
             sync::handle_events(self);
+        }
+
+        // Update frame timing stats
+        let frame_time = frame_start.elapsed();
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            if fc.should_present_frame() {
+                fc.frame_presented();
+            }
+        }
+        
+        // Update display sync
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.update(frame_time);
+        }
+        
+        // Update power management metrics
+        if let Some(pm) = self.power_management.as_mut() {
+            let fps = 1.0 / frame_time.as_secs_f32();
+            let frame_time_ms = frame_time.as_secs_f32() * 1000.0;
+            pm.update_metrics(fps, frame_time_ms);
         }
 
         // Update developer overlay if enabled
@@ -365,6 +403,111 @@ impl Psx {
     /// Update developer overlay metrics
     fn update_developer_overlay(&mut self, elapsed_cycles: CycleCount) {
         self.developer_overlay.update(self, elapsed_cycles);
+    }
+
+    /// Update power management system
+    pub fn update_power_management(&mut self, has_input: bool, temperature: f32) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.update_idle(has_input);
+            pm.check_thermal(temperature);
+            
+            // Apply CPU frequency scaling
+            let cpu_freq_multiplier = pm.get_cpu_frequency_mhz() as f32 / 2400.0;
+            self.cpu.frequency_multiplier = cpu_freq_multiplier;
+            
+            // Apply GPU clock scaling
+            let gpu_clock_multiplier = pm.get_gpu_clock_mhz() as f32 / 800.0;
+            self.gpu.clock_multiplier = gpu_clock_multiplier;
+        }
+    }
+
+    /// Check if frame should be presented based on power management settings
+    pub fn should_present_frame_pm(&mut self) -> bool {
+        self.power_management.as_mut()
+            .map(|pm| pm.should_present_frame())
+            .unwrap_or(true)
+    }
+
+    /// Enable fast-forward mode with power boost
+    pub fn enable_fast_forward(&mut self) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.enable_fast_forward();
+        }
+    }
+
+    /// Disable fast-forward mode
+    pub fn disable_fast_forward(&mut self) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.disable_fast_forward();
+        }
+    }
+
+    /// Load a game-specific power profile
+    pub fn load_power_profile(&mut self, game_id: &str) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.load_game_profile(game_id);
+        }
+    }
+
+    /// Save current power settings as a game profile
+    pub fn save_power_profile(&mut self, game_id: String, name: String) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.save_game_profile(game_id, name);
+        }
+    }
+
+    /// Set framerate cap
+    pub fn set_framerate_cap(&mut self, cap: power_management::FramerateCap) {
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            fc.set_target_fps(match cap {
+                power_management::FramerateCap::Fps30 => 30.0,
+                power_management::FramerateCap::Fps40 => 40.0,
+                power_management::FramerateCap::Fps60 => 60.0,
+                power_management::FramerateCap::Uncapped => 120.0,
+                power_management::FramerateCap::Custom(fps) => fps as f32,
+            });
+        }
+    }
+
+    /// Set display refresh rate
+    pub fn set_refresh_rate(&mut self, rate: f32) {
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.set_refresh_rate(rate);
+        }
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            fc.set_refresh_rate(rate);
+        }
+    }
+
+    /// Enable/disable VRR
+    pub fn set_vrr_enabled(&mut self, enabled: bool) {
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.set_vrr_enabled(enabled);
+        }
+    }
+
+    /// Update battery information
+    pub fn update_battery(&mut self, charge_percent: f32, is_charging: bool, current_draw_ma: f32) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.update_battery(charge_percent, is_charging, current_draw_ma);
+        }
+    }
+
+    /// Get power management metrics
+    pub fn get_power_metrics(&self) -> Option<&power_management::PerformanceMetrics> {
+        self.power_management.as_ref().map(|pm| &pm.metrics)
+    }
+
+    /// Get battery information
+    pub fn get_battery_info(&self) -> Option<&power_management::BatteryInfo> {
+        self.power_management.as_ref().map(|pm| &pm.battery_info)
+    }
+
+    /// Apply OLED optimizations to a frame
+    pub fn apply_oled_optimizations(&self, frame: &mut [u8], width: usize, height: usize) {
+        if let Some(pm) = self.power_management.as_ref() {
+            pm.apply_oled_optimizations(frame, width, height);
+        }
     }
 
     /// Advance the CPU cycle counter by the given number of ticks

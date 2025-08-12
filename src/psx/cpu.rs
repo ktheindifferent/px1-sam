@@ -46,6 +46,8 @@ pub struct Cpu {
     delay_slot: bool,
     /// If true BREAK instructions trigged the debugger instead of generating an exception
     debug_on_break: bool,
+    /// Frequency multiplier for dynamic clock scaling
+    pub frequency_multiplier: f32,
     /// Date at which the last division or multiplication will be done. DIV(U) and MULT(U) can run
     /// concurrently with other "normal" MIPS instructions and only block if a mf(hi|lo) is
     /// executed before they're finished
@@ -80,6 +82,7 @@ impl Cpu {
             icache: [ICacheLine::new(); 0x100],
             delay_slot: false,
             debug_on_break: false,
+            frequency_multiplier: 1.0,
             mult_div_end: 0,
             gte_command_end: 0,
             opcode_table_offset: 0,
