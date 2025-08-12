@@ -39,8 +39,6 @@ pub enum PsxError {
     DeserializationError(String),
     #[error("Database error: {0}")]
     DatabaseError(String),
-    #[error("Network error: {0}")]
-    NetworkError(String),
     #[error("Emulation error: {0}")]
     EmulationError(String),
     #[error("Save state error during {operation}: {reason}")]
@@ -58,4 +56,34 @@ pub enum PsxError {
         module: String,
         reason: String,
     },
+    #[error("Invalid patch file")]
+    InvalidPatch,
+    #[error("Patch format not supported")]
+    UnsupportedPatchFormat,
+    #[error("Unknown patch format")]
+    UnknownPatchFormat,
+    #[error("Patch is too large")]
+    PatchTooBig,
+    #[error("Checksum mismatch in patch")]
+    ChecksumMismatch,
+    #[error("File not found")]
+    FileNotFound,
+    #[error("File write error")]
+    FileWriteError,
+    #[error("Patch already exists")]
+    PatchAlreadyExists,
+    #[error("Patch not found")]
+    PatchNotFound,
+    #[error("Profile already exists")]
+    ProfileAlreadyExists,
+    #[error("Profile not found")]
+    ProfileNotFound,
+    #[error("Serialization error")]
+    SerializationError,
+    #[error("Invalid input")]
+    InvalidInput,
+    #[error("Network error")]
+    NetworkError,
+    #[error("Web environment error")]
+    WebEnvironmentError,
 }

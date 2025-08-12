@@ -79,6 +79,9 @@ parking_lot = "0.12"
 rayon = "1.7"
 base64 = "0.21"
 
+# Patching system dependencies
+md5 = "0.7"
+
 
 # GGPO Netplay dependencies and Cloud sync
 ring = "0.17"
