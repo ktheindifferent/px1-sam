@@ -26,6 +26,7 @@ discord-rpc = ["discord-rich-presence", "tokio"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
+memory-forensics = ["mlua", "keystone"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -101,6 +102,14 @@ spirv-reflect = { version = "0.2", optional = true }
 
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
+
+# Memory forensics dependencies
+xml-rs = "0.8"
+pest = "2.7"
+pest_derive = "2.7"
+mlua = { version = "0.9", features = ["lua54", "vendored"], optional = true }
+capstone = "0.11"
+keystone = { version = "0.9", optional = true }
 
 # Dear ImGui dependencies
 imgui = "0.11"

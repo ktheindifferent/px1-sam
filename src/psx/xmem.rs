@@ -186,6 +186,46 @@ impl XMemory {
         self.load(bios_base + offset)
     }
 
+    /// Get read-only access to RAM (for forensics and save states)
+    pub fn ram(&self) -> &[u8] {
+        let ram_base = ((MemoryPage::Ram as usize) << PAGE_SHIFT) / 4;
+        let ram_words = &self.memory[ram_base..ram_base + RAM_SIZE_WORDS];
+        
+        // Convert u32 array to u8 slice
+        unsafe {
+            std::slice::from_raw_parts(
+                ram_words.as_ptr() as *const u8,
+                RAM_SIZE,
+            )
+        }
+    }
+
+    /// Set RAM contents (for save states)
+    pub fn set_ram(&mut self, data: &[u8]) {
+        if data.len() != RAM_SIZE {
+            return;
+        }
+        
+        let ram_base = (MemoryPage::Ram as u32) << PAGE_SHIFT;
+        for (i, &byte) in data.iter().enumerate() {
+            self.store(ram_base + i as u32, byte);
+        }
+    }
+
+    /// Get read-only access to BIOS (for forensics)
+    pub fn bios(&self) -> &[u8] {
+        let bios_base = ((MemoryPage::Bios as usize) << PAGE_SHIFT) / 4;
+        let bios_words = &self.memory[bios_base..bios_base + (BIOS_SIZE / 4)];
+        
+        // Convert u32 array to u8 slice
+        unsafe {
+            std::slice::from_raw_parts(
+                bios_words.as_ptr() as *const u8,
+                BIOS_SIZE,
+            )
+        }
+    }
+
     /// Fetch instruction at absolute address `addr`
     pub fn load_instruction(&self, addr: u32) -> cpu::Instruction {
         let page = addr >> PAGE_SHIFT;

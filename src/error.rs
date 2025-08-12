@@ -86,4 +86,6 @@ pub enum PsxError {
     NetworkError,
     #[error("Web environment error")]
     WebEnvironmentError,
+    #[error("Memory forensics error: {0}")]
+    ForensicsError(String),
 }
