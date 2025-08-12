@@ -27,6 +27,7 @@ game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
 memory-forensics = ["mlua", "keystone"]
+mod-support = ["mlua", "notify", "semver"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -107,9 +108,13 @@ gl = { version = "0.14", optional = true }
 xml-rs = "0.8"
 pest = "2.7"
 pest_derive = "2.7"
-mlua = { version = "0.9", features = ["lua54", "vendored"], optional = true }
 capstone = "0.11"
 keystone = { version = "0.9", optional = true }
+
+# Mod support dependencies
+mlua = { version = "0.9", features = ["lua54", "vendored", "serialize", "async"], optional = true }
+notify = { version = "6.1", optional = true }
+semver = { version = "1.0", optional = true }
 
 # Dear ImGui dependencies
 imgui = "0.11"
