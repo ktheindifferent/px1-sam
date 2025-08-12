@@ -45,6 +45,8 @@ pub mod framerate_controller;
 pub mod display_sync;
 pub mod retroachievements;
 pub mod security;
+#[cfg(feature = "sunshine")]
+pub mod sunshine;
 
 // ARM-specific optimizations
 #[cfg(target_arch = "aarch64")]
