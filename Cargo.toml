@@ -21,7 +21,7 @@ netplay = ["tokio", "quinn", "webrtc", "igd"]
 fightcade = ["netplay"]
 tracy = ["dep:tracy-client"]
 optick = ["dep:optick"]
-discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
+discord-rpc = ["discord-rich-presence", "tokio"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
@@ -30,7 +30,7 @@ streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", optional = true }
+serde_json = "1.0"
 thiserror = "1.0"
 log = "0.4"
 wasm-logger = "0.2"
