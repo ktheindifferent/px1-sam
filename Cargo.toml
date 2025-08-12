@@ -13,6 +13,7 @@ pgxp = []
 debugger = []
 compatibility-db = ["rusqlite", "chrono", "uuid"]
 online-sync = ["reqwest", "tokio", "compatibility-db"]
+cloud-sync = ["reqwest", "tokio", "async-trait", "ring", "uuid", "chrono"]
 vulkan-renderer = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
@@ -78,7 +79,7 @@ rayon = "1.7"
 base64 = "0.21"
 
 
-# GGPO Netplay dependencies
+# GGPO Netplay dependencies and Cloud sync
 ring = "0.17"
 quinn = { version = "0.10", optional = true }
 webrtc = { version = "0.9", optional = true }
