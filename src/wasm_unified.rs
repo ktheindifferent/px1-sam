@@ -32,6 +32,9 @@ mod bitwise;
 #[path = "box_array.rs"]
 mod box_array;
 
+// Performance dashboard module
+pub mod performance_dashboard;
+
 use psx::Psx;
 
 #[wasm_bindgen]
