@@ -11,6 +11,7 @@ path = "src/wasm_unified.rs"
 default = []
 pgxp = []
 debugger = []
+ghidra = ["debugger", "chrono", "serde_json"]
 compatibility-db = ["rusqlite", "chrono", "uuid"]
 online-sync = ["reqwest", "tokio", "compatibility-db"]
 cloud-sync = ["reqwest", "tokio", "async-trait", "ring", "uuid", "chrono"]

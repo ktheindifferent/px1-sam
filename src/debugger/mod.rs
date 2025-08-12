@@ -1,4 +1,5 @@
 use std::net::TcpListener;
+use std::path::Path;
 
 use crate::psx::debugger::Debugger as DebuggerInterface;
 use crate::psx::map::mask_region;
@@ -6,10 +7,12 @@ use crate::psx::Psx;
 
 use self::gdb::GdbRemote;
 use self::elf::SymbolTable;
+use self::ghidra::{GhidraIntegration, GhidraConfig};
 
 mod bios;
 mod gdb;
 mod elf;
+pub mod ghidra;
 
 #[cfg(test)]
 mod tests;
@@ -25,15 +28,17 @@ pub struct Debugger {
     /// If a single step is requested this flag is set
     step: bool,
     /// Vector containing all active breakpoint addresses
-    breakpoints: Vec<u32>,
+    pub breakpoints: Vec<u32>,
     /// Vector containing all active read watchpoints
-    read_watchpoints: Vec<u32>,
+    pub read_watchpoints: Vec<u32>,
     /// Vector containing all active write watchpoints
-    write_watchpoints: Vec<u32>,
+    pub write_watchpoints: Vec<u32>,
     /// If true we additionally log BIOS calls
     log_bios_calls: bool,
     /// Symbol table for debugging
     symbol_table: SymbolTable,
+    /// Ghidra integration
+    ghidra: Option<GhidraIntegration>,
 }
 
 impl Debugger {
@@ -58,6 +63,7 @@ impl Debugger {
             write_watchpoints: Vec::new(),
             log_bios_calls: false,
             symbol_table: SymbolTable::new(),
+            ghidra: None,
         }
     }
 
@@ -120,8 +126,56 @@ impl Debugger {
         self.step = true;
     }
 
+    /// Initialize Ghidra integration
+    pub fn init_ghidra(&mut self, config: GhidraConfig) -> Result<(), String> {
+        let mut ghidra = GhidraIntegration::new(config)?;
+        ghidra.init_bridge()?;
+        self.ghidra = Some(ghidra);
+        Ok(())
+    }
+    
+    /// Export to Ghidra project
+    pub fn export_to_ghidra(&mut self, psx: &Psx, project_name: &str, output_path: &Path) -> Result<(), String> {
+        if let Some(ref mut ghidra) = self.ghidra {
+            ghidra.export_project(psx, project_name, output_path)?;
+            Ok(())
+        } else {
+            Err("Ghidra integration not initialized".to_string())
+        }
+    }
+    
+    /// Import Ghidra database
+    pub fn import_ghidra_database(&mut self, path: &Path) -> Result<(), String> {
+        if let Some(ref mut ghidra) = self.ghidra {
+            ghidra.import_database(path)?;
+            Ok(())
+        } else {
+            Err("Ghidra integration not initialized".to_string())
+        }
+    }
+    
+    /// Handle Ghidra connection
+    pub fn handle_ghidra(&mut self, psx: &mut Psx) -> Result<(), String> {
+        if let Some(ref mut ghidra) = self.ghidra {
+            // Check for incoming connections
+            if ghidra.accept_connection().is_ok() {
+                info!("Ghidra connected");
+            }
+            
+            // Handle commands
+            ghidra.handle_ghidra_command(psx, self)?;
+            
+            // Sync breakpoints
+            ghidra.sync_breakpoints(self)?;
+            
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
     /// Add a breakpoint that will trigger when the instruction at `addr` is about to be executed.
-    fn add_breakpoint(&mut self, addr: u32) {
+    pub fn add_breakpoint(&mut self, addr: u32) {
         let addr = mask_region(addr);
 
         // Make sure we're not adding the same address twice
@@ -131,14 +185,14 @@ impl Debugger {
     }
 
     /// Delete breakpoint at `addr`. Does nothing if there was no breakpoint set for this address.
-    fn del_breakpoint(&mut self, addr: u32) {
+    pub fn del_breakpoint(&mut self, addr: u32) {
         let addr = mask_region(addr);
 
         self.breakpoints.retain(|&a| a != addr);
     }
 
     /// Add a breakpoint that will trigger when the psx attempts to read from `addr`
-    fn add_read_watchpoint(&mut self, addr: u32) {
+    pub fn add_read_watchpoint(&mut self, addr: u32) {
         let addr = mask_region(addr);
 
         // Make sure we're not adding the same address twice
@@ -149,14 +203,14 @@ impl Debugger {
 
     /// Delete read watchpoint at `addr`. Does nothing if there was no breakpoint set for this
     /// address.
-    fn del_read_watchpoint(&mut self, addr: u32) {
+    pub fn del_read_watchpoint(&mut self, addr: u32) {
         let addr = mask_region(addr);
 
         self.read_watchpoints.retain(|&a| a != addr);
     }
 
     /// Add a breakpoint that will trigger when the psx attempts to write to `addr`
-    fn add_write_watchpoint(&mut self, addr: u32) {
+    pub fn add_write_watchpoint(&mut self, addr: u32) {
         let addr = mask_region(addr);
 
         // Make sure we're not adding the same address twice
@@ -167,7 +221,7 @@ impl Debugger {
 
     /// Delete write watchpoint at `addr`. Does nothing if there was no breakpoint set for this
     /// address.
-    fn del_write_watchpoint(&mut self, addr: u32) {
+    pub fn del_write_watchpoint(&mut self, addr: u32) {
         let addr = mask_region(addr);
 
         self.write_watchpoints.retain(|&a| a != addr);
