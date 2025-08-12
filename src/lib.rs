@@ -55,11 +55,16 @@ mod rewind_integration;
 mod achievement;
 #[cfg(feature = "streaming")]
 pub mod streaming;
+pub mod patching;
+#[cfg(feature = "mod-support")]
+pub mod mod_management;
 
 #[cfg(feature = "game-library")]
 pub mod game_library;
 #[cfg(feature = "cloud-sync")]
 pub mod cloud_sync;
+#[cfg(feature = "cloud-gaming")]
+pub mod cloud_gaming;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
@@ -172,6 +177,9 @@ struct Context {
     /// Streaming manager for content creation
     #[cfg(feature = "streaming")]
     streaming_manager: Option<streaming::StreamingManager>,
+    /// Mod management system
+    #[cfg(feature = "mod-support")]
+    mod_manager: Option<mod_management::ModManager>,
 }
 
 impl Context {
@@ -210,11 +218,16 @@ impl Context {
             font_scaler: accessibility::settings::FontScaler::new(),
             #[cfg(feature = "streaming")]
             streaming_manager: None,
+            #[cfg(feature = "mod-support")]
+            mod_manager: None,
         };
 
         libretro::Context::refresh_variables(&mut ctx);
 
         ctx.setup_memory_cards();
+        
+        #[cfg(feature = "mod-support")]
+        ctx.initialize_mod_manager();
 
         #[cfg(feature = "debugger")]
         {
@@ -591,6 +604,67 @@ impl Context {
     #[cfg(feature = "streaming")]
     fn is_streaming(&self) -> bool {
         self.streaming_manager.as_ref().map_or(false, |m| m.is_streaming())
+    }
+    
+    #[cfg(feature = "mod-support")]
+    fn initialize_mod_manager(&mut self) {
+        use mod_management::ModManager;
+        
+        // Get emulator version
+        let version = version::VERSION.to_string();
+        let mut manager = ModManager::new(version);
+        
+        // Add mod directories
+        if let Some(system_dir) = libretro::get_system_directory() {
+            manager.add_mod_directory(system_dir.join("mods"));
+        }
+        
+        if let Some(save_dir) = libretro::get_save_directory() {
+            manager.add_mod_directory(save_dir.join("mods"));
+        }
+        
+        // Enable hot reload in debug builds
+        #[cfg(debug_assertions)]
+        manager.enable_hot_reload();
+        
+        // Scan and load mods
+        match manager.scan_and_load_mods() {
+            Ok(mods) => {
+                log::info!("Loaded {} mods", mods.len());
+                
+                // Auto-enable compatible mods
+                for mod_id in &mods {
+                    if let Err(e) = manager.enable_mod(mod_id) {
+                        log::warn!("Failed to enable mod {}: {}", mod_id, e);
+                    }
+                }
+            }
+            Err(e) => log::error!("Failed to load mods: {}", e),
+        }
+        
+        self.mod_manager = Some(manager);
+    }
+    
+    #[cfg(feature = "mod-support")]
+    fn process_mod_hooks(&mut self, address: u32) -> bool {
+        if let Some(ref manager) = self.mod_manager {
+            // Check if address has hooks
+            // This would interface with the actual emulator
+            false
+        } else {
+            false
+        }
+    }
+    
+    #[cfg(feature = "mod-support")]
+    fn get_modded_texture(&self, hash: &str) -> Option<Vec<u8>> {
+        if let Some(ref manager) = self.mod_manager {
+            // Check for texture replacements
+            // This would return the replacement texture data
+            None
+        } else {
+            None
+        }
     }
 
     fn output_frame(&mut self) {

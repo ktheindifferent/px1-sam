@@ -33,3 +33,7 @@ mod discord_rpc_tests;
 
 #[cfg(test)]
 mod rewind_tests;
+
+#[cfg(test)]
+#[cfg(feature = "cloud-gaming")]
+mod cloud_gaming_tests;

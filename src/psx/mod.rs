@@ -47,6 +47,11 @@ pub mod framerate_controller;
 pub mod display_sync;
 pub mod retroachievements;
 pub mod security;
+#[cfg(feature = "sunshine")]
+pub mod sunshine;
+pub mod orchestration;
+#[cfg(feature = "memory-forensics")]
+pub mod memory_forensics;
 
 // ARM-specific optimizations
 #[cfg(target_arch = "aarch64")]
@@ -1256,6 +1261,18 @@ impl ScratchPad {
 
         for i in 0..T::width() as usize {
             self.data[offset + i] = (val >> (i * 8)) as u8;
+        }
+    }
+
+    /// Get read-only access to scratchpad data (for forensics)
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Set scratchpad data (for save states)
+    pub fn set_data(&mut self, data: &[u8]) {
+        if data.len() == SCRATCH_PAD_SIZE {
+            self.data.copy_from_slice(data);
         }
     }
 }
