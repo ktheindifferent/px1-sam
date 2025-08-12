@@ -15,6 +15,7 @@ pub mod texture_upscaling;
 pub mod crt_shaders;
 pub mod crt_shader_pipeline;
 pub mod frame_interpolation;
+pub mod optical_flow;
 pub mod crt_beam_renderer;
 pub mod pixel_scaling;
 
@@ -38,6 +39,8 @@ mod rendering_test;
 mod shader_cache_test;
 #[cfg(test)]
 mod memory_prefetch_test;
+#[cfg(test)]
+mod frame_interpolation_tests;
 #[cfg(test)]
 mod pixel_scaling_tests;
 

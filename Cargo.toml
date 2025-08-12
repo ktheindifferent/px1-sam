@@ -26,6 +26,7 @@ discord-rpc = ["discord-rich-presence", "tokio"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
+ai-frame-generation = ["ort", "ndarray", "half", "imageproc", "memmap2", "crossbeam"]
 cloud-gaming = ["webrtc", "tokio", "futures", "bytes", "rand", "stun_codec", "turn", "ice"]
 sunshine = ["streaming", "tokio", "async-trait", "rustls", "webpki"]
 memory-forensics = ["mlua", "keystone"]
@@ -155,6 +156,14 @@ x264 = { version = "0.5", optional = true }
 websocket = { version = "0.26", optional = true }
 v4l = { version = "0.14", optional = true }
 cpal = { version = "0.15", optional = true }
+
+# AI Frame Generation dependencies
+ort = { version = "2.0.0-rc.10", features = ["cuda", "tensorrt"], optional = true }
+ndarray = { version = "0.15", optional = true }
+half = { version = "2.3", features = ["serde"], optional = true }
+imageproc = { version = "0.23", optional = true }
+memmap2 = { version = "0.9", optional = true }
+crossbeam = { version = "0.8", optional = true }
 
 # Cloud Gaming dependencies
 turn = { version = "0.6", optional = true }
