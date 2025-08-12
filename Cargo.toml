@@ -48,6 +48,9 @@ hex = "0.4"
 bincode = "1.3"
 num_cpus = "1.16"
 
+# Testing dependencies
+backtrace = "0.3"
+
 # Rewind system dependencies
 zstd = "0.13"
 crc32fast = "1.3"
@@ -74,8 +77,21 @@ features = [
   "HtmlElement",
   "Window",
   "CanvasRenderingContext2d",
+  "WebGl2RenderingContext",
+  "WebGlProgram",
+  "WebGlShader",
+  "WebGlTexture",
+  "WebGlBuffer",
+  "WebGlUniformLocation",
   "ImageData",
   "KeyboardEvent",
+  "MouseEvent",
+  "TouchEvent",
+  "Touch",
+  "TouchList",
+  "PointerEvent",
+  "WheelEvent",
+  "GamepadEvent",
   "AudioContext",
   "AudioBuffer",
   "AudioBufferSourceNode",
@@ -84,8 +100,30 @@ features = [
   "BaseAudioContext",
   "Gamepad",
   "GamepadButton",
+  "Navigator",
+  "Performance",
+  "Storage",
+  "IdbDatabase",
+  "IdbObjectStore",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbFactory",
+  "ServiceWorkerRegistration",
+  "ServiceWorkerContainer",
+  "Worker",
+  "MessagePort",
+  "OffscreenCanvas",
+  "Blob",
+  "File",
+  "FileReader",
+  "Url",
+  "UrlSearchParams",
+  "Response",
+  "RequestInit",
+  "RequestMode",
+  "Headers",
+  "WorkerGlobalScope",
 ]
-
 
 [profile.release]
 opt-level = "s"
