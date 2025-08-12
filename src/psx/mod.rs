@@ -35,6 +35,11 @@ mod sync;
 mod timers;
 mod vram;
 mod xmem;
+pub mod zram;
+pub mod zram_config;
+pub mod run_ahead;
+pub mod fast_savestate;
+pub mod run_ahead_integration;
 pub mod power_management;
 pub mod framerate_controller;
 pub mod display_sync;
@@ -49,6 +54,7 @@ pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
 pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
 pub use spu::{SpuDebugOverlay, interpolation};
+pub use zram::{ZramSystem, GpuMemoryCompressor, CompressionStats};
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -110,6 +116,12 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// ZRAM memory compression system (not serialized)
+    #[serde(skip)]
+    zram_system: zram::ZramSystem,
+    /// GPU memory compressor (not serialized)
+    #[serde(skip)]
+    gpu_compressor: zram::GpuMemoryCompressor,
     /// Game compatibility manager (not serialized)
     #[serde(skip)]
     compatibility_manager: compatibility::CompatibilityManager,
@@ -194,6 +206,8 @@ impl Psx {
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            zram_system: zram::ZramSystem::new(4096, num_cpus::get()),
+            gpu_compressor: zram::GpuMemoryCompressor::new(),
             compatibility_manager: compatibility::CompatibilityManager::new(),
             ggpo_session: None,
             power_management: Some(power_management::PowerManagement::new()),
@@ -275,6 +289,22 @@ impl Psx {
         self.gpu.get_frame()
     }
 
+    /// Step the emulator by one CPU instruction or event
+    pub fn step(&mut self) {
+        if self.cpu_stalled_for_dma {
+            // Fast forward to the next event
+            self.cycle_counter = self.sync.first_event();
+        } else {
+            if !sync::is_event_pending(self) {
+                cpu::run_next_instruction(self);
+            }
+        }
+
+        if sync::is_event_pending(self) {
+            sync::handle_events(self);
+        }
+    }
+
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
         use std::time::Instant;
@@ -282,6 +312,7 @@ impl Psx {
         
         self.frame_done = false;
         while !self.frame_done {
+            self.step();
             // Process memory bus for this cycle
             let bus_cycles = self.memory_bus.tick(self.cycle_counter);
             self.tick(bus_cycles);
@@ -423,6 +454,51 @@ impl Psx {
         self.developer_overlay.update(self, elapsed_cycles);
     }
 
+    /// Compress memory block using ZRAM
+    pub fn compress_memory_block(&self, block_id: usize, data: &[u8], data_type: zram::DataType) -> f32 {
+        self.zram_system.store_compressed(block_id, data, data_type)
+    }
+
+    /// Decompress memory block from ZRAM
+    pub fn decompress_memory_block(&self, block_id: usize) -> Option<Vec<u8>> {
+        self.zram_system.retrieve_decompressed(block_id)
+    }
+
+    /// Prefetch memory blocks for reduced latency
+    pub fn prefetch_memory_blocks(&self, block_ids: &[usize]) {
+        self.zram_system.prefetch(block_ids)
+    }
+
+    /// Get ZRAM compression statistics
+    pub fn get_zram_stats(&self) -> zram::CompressionStats {
+        self.zram_system.get_stats()
+    }
+
+    /// Get ZRAM memory usage (compressed_size, original_size)
+    pub fn get_zram_memory_usage(&self) -> (usize, usize) {
+        self.zram_system.get_memory_usage()
+    }
+
+    /// Compress GPU texture
+    pub fn compress_gpu_texture(&self, texture_id: u64, data: &[u8]) -> f32 {
+        self.gpu_compressor.compress_texture(texture_id, data)
+    }
+
+    /// Decompress GPU texture
+    pub fn decompress_gpu_texture(&self, texture_id: u64) -> Option<Vec<u8>> {
+        self.gpu_compressor.decompress_texture(texture_id)
+    }
+
+    /// Compress GPU framebuffer
+    pub fn compress_gpu_framebuffer(&self, fb_id: usize, data: &[u8]) -> f32 {
+        self.gpu_compressor.compress_framebuffer(fb_id, data)
+    }
+
+    /// Clear ZRAM compression cache
+    pub fn clear_zram_cache(&self) {
+        self.zram_system.clear()
+    }
+    
     /// Update power management system
     pub fn update_power_management(&mut self, has_input: bool, temperature: f32) {
         if let Some(pm) = self.power_management.as_mut() {

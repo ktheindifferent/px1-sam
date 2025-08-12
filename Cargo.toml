@@ -11,6 +11,9 @@ path = "src/wasm_unified.rs"
 default = []
 pgxp = []
 debugger = []
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
+vulkan-renderer = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
 compatibility-db = ["rusqlite", "chrono", "uuid"]
@@ -37,6 +40,8 @@ bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
 bincode = "1.3"
+flate2 = "1.0"
+serde-big-array = "0.5"
 # Texture replacement dependencies  
 sha2 = "0.10"
 image = "0.24"
@@ -110,6 +115,9 @@ spirv-reflect = { version = "0.2", optional = true }
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
 
+# Compression dependencies for ZRAM
+lz4_flex = "0.11"
+zstd = "0.13"
 # External profiler dependencies
 tracy-client = { version = "0.16", optional = true }
 optick = { version = "1.3.4", optional = true }

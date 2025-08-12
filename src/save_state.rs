@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use flate2::write::GzEncoder;
 use flate2::read::GzDecoder;
 use flate2::Compression;
+use crate::psx::zram::{ZramSystem, DataType, CompressionAlgorithm};
 
 const SAVE_STATE_VERSION: u32 = 1;
 const SAVE_STATE_MAGIC: &[u8; 8] = b"PSXSTATE";
@@ -253,6 +254,58 @@ impl SaveState {
                 operation: "finalize".to_string(),
                 reason: e.to_string(),
             })
+    }
+
+    /// Serialize save state with ZRAM compression for better ratio
+    pub fn to_bytes_zram(&self) -> Result<Vec<u8>> {
+        // Serialize with bincode first
+        let data = bincode::serialize(self)
+            .map_err(|e| PsxError::SaveStateError {
+                operation: "serialize".to_string(),
+                reason: e.to_string(),
+            })?;
+        
+        // Use Zstandard with level 5 for save states (good compression)
+        let compressed = zstd::encode_all(&data[..], 5)
+            .map_err(|e| PsxError::SaveStateError {
+                operation: "zram_compress".to_string(),
+                reason: e.to_string(),
+            })?;
+        
+        Ok(compressed)
+    }
+    
+    /// Deserialize save state from ZRAM compressed bytes
+    pub fn from_bytes_zram(data: &[u8]) -> Result<Self> {
+        // Decompress with Zstandard
+        let decompressed = zstd::decode_all(data)
+            .map_err(|e| PsxError::SaveStateError {
+                operation: "zram_decompress".to_string(),
+                reason: e.to_string(),
+            })?;
+        
+        let state: SaveState = bincode::deserialize(&decompressed)
+            .map_err(|e| PsxError::SaveStateError {
+                operation: "deserialize".to_string(),
+                reason: e.to_string(),
+            })?;
+        
+        // Validate header
+        if state.header.magic != *SAVE_STATE_MAGIC {
+            return Err(PsxError::SaveStateError {
+                operation: "validate".to_string(),
+                reason: "Invalid magic number".to_string(),
+            });
+        }
+        
+        if state.header.version > SAVE_STATE_VERSION {
+            return Err(PsxError::SaveStateError {
+                operation: "validate".to_string(),
+                reason: format!("Unsupported version: {}", state.header.version),
+            });
+        }
+        
+        Ok(state)
     }
 
     /// Deserialize save state from compressed bytes
