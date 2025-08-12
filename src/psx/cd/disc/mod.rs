@@ -23,6 +23,7 @@ mod cache;
 pub mod advanced_cache;
 pub mod advanced_cache_wasm;
 pub mod wasm_integration;
+pub mod patching_integration;
 
 #[cfg(test)]
 mod cache_tests;

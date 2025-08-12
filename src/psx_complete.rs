@@ -2048,6 +2048,25 @@ impl Psx {
         self.cycle_counter += cycles;
     }
     
+    pub fn step(&mut self) {
+        // Single step execution
+        if let Ok(instruction) = self.load32(self.cpu.pc) {
+            self.cpu.current_pc = self.cpu.pc;
+            self.cpu.pc = self.cpu.next_pc;
+            self.cpu.next_pc = self.cpu.pc.wrapping_add(4);
+            
+            self.execute_cpu_instruction(instruction);
+            self.cycle_counter += 1;
+            
+            // Check for interrupts
+            if self.cop0.interrupt_pending(&self.irq) {
+                let handler = self.cop0.exception(Exception::Interrupt, self.cpu.current_pc, false);
+                self.cpu.pc = handler;
+                self.cpu.next_pc = handler.wrapping_add(4);
+            }
+        }
+    }
+    
     // Memory access
     pub fn load8(&mut self, addr: u32) -> Result<u8> {
         let physical = mask_region(addr);

@@ -6,6 +6,7 @@ mod fifo;
 mod fir;
 pub mod interpolation;
 mod reverb_resampler;
+pub mod spatial_audio;
 
 use super::{cd, cpu, irq, sync, AccessWidth, Addressable, CycleCount, Psx};
 use fifo::DecoderFifo;
