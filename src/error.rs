@@ -44,18 +44,18 @@ pub enum PsxError {
     #[error("Emulation error: {0}")]
     EmulationError(String),
     #[error("Save state error during {operation}: {reason}")]
-<<<<<<< HEAD
-    SaveStateError { operation: String, reason: String },
+    SaveStateError { 
+        operation: String, 
+        reason: String 
+    },
     #[error("Netplay error during {operation}: {reason}")]
-    NetplayError { operation: String, reason: String },
-=======
-<<<<<<< HEAD
-    SaveStateError { operation: String, reason: String },
-=======
-    SaveStateError {
-        operation: String,
+    NetplayError { 
+        operation: String, 
+        reason: String 
+    },
+    #[error("Security error in {module}: {reason}")]
+    SecurityError {
+        module: String,
         reason: String,
     },
->>>>>>> origin/main
->>>>>>> origin/main
 }
