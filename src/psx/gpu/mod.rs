@@ -3,12 +3,17 @@ mod fifo;
 mod rasterizer;
 mod error_handler;
 mod debug_overlay;
+pub mod texture_replacement;
 pub mod texture_cache;
 mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
 pub mod texture_upscaling;
+pub mod crt_shaders;
+pub mod crt_shader_pipeline;
+pub mod frame_interpolation;
+pub mod crt_beam_renderer;
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan_shader;
@@ -33,14 +38,30 @@ pub use rasterizer::{Frame, Pixel, RasterizerOption};
 pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
+use crate::frame_pacing::FramePacer;
+pub use crate::frame_pacing::{DisplayMode, DisplayCapabilities, FramePacingStats};
+use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
+use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
 
 const GPUSYNC: sync::SyncToken = sync::SyncToken::Gpu;
+
+/// CRT Beam Renderer presets for different display configurations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CrtBeamPreset {
+    Default,
+    Hz120,
+    Hz240Oled,
+    Hdr,
+    MaxMotionClarity,
+    AuthenticCrt,
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Gpu {
@@ -122,12 +143,24 @@ pub struct Gpu {
     read_word: u32,
     /// Debug overlay for error visualization
     debug_overlay: DebugOverlay,
+    /// Texture replacement system
+    texture_replacement: Option<TextureReplacementSystem>,
+    /// Current game ID for texture pack management
+    current_game_id: String,
     /// Hardware-accurate rendering pipeline
     rendering_pipeline: RenderingPipeline,
+    /// Frame pacing and VRR controller
+    frame_pacer: FramePacer,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
     /// AI texture upscaling system
     texture_upscaler: Option<texture_upscaling::TextureUpscalingSystem>,
+    /// Clock multiplier for dynamic GPU clock scaling
+    pub clock_multiplier: f32,
+    /// Revolutionary CRT beam simulation renderer
+    crt_beam_renderer: Option<CrtBeamRenderer>,
+    /// CRT beam configuration
+    crt_beam_config: CrtBeamConfig,
 }
 
 impl Gpu {
@@ -175,11 +208,21 @@ impl Gpu {
             display_off: true,
             read_word: 0,
             debug_overlay: DebugOverlay::new(),
+            texture_replacement: None,
+            current_game_id: String::new(),
             rendering_pipeline: RenderingPipeline::new(),
+            frame_pacer: FramePacer::new(),
             shader_manager: None,
             texture_upscaler: None,
+            clock_multiplier: 1.0,
+            crt_beam_renderer: None,
+            crt_beam_config: CrtBeamConfig::default(),
         };
 
+        // Detect display capabilities and set up frame pacing
+        gpu.frame_pacer.detect_display_capabilities();
+        gpu.frame_pacer.set_pal_mode(video_standard == VideoStandard::Pal);
+        
         gpu.refresh_lines_per_field();
         
         log::info!("GPU: Initialization complete. Lines per field: {}", gpu.lines_per_field);
@@ -237,6 +280,75 @@ impl Gpu {
         }
     }
     
+    /// Initialize texture replacement system
+    pub fn init_texture_replacement(&mut self, config: TextureReplacementConfig) {
+        log::info!("Initializing texture replacement system");
+        self.texture_replacement = Some(TextureReplacementSystem::new(config));
+    }
+    
+    /// Set current game ID for texture pack management
+    pub fn set_game_id(&mut self, game_id: String) {
+        log::info!("Setting game ID: {}", game_id);
+        self.current_game_id = game_id;
+    }
+    
+    /// Load texture pack for current game
+    pub fn load_texture_pack(&mut self, pack_name: &str) -> Result<(), String> {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            tex_sys.load_texture_pack(&self.current_game_id, pack_name)
+        } else {
+            Err("Texture replacement system not initialized".to_string())
+        }
+    }
+    
+    /// Process texture for potential replacement
+    fn process_texture_replacement(
+        &mut self,
+        vram_data: &[u16],
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        clut_data: Option<&[u16]>,
+    ) -> Option<texture_replacement::LoadedTexture> {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            tex_sys.process_texture(
+                vram_data,
+                x,
+                y,
+                width,
+                height,
+                clut_data,
+                &self.current_game_id,
+            )
+        } else {
+            None
+        }
+    }
+    
+    /// Poll for async texture loads
+    pub fn poll_texture_loads(&mut self) {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            let loaded = tex_sys.poll_async_loads();
+            for (hash, texture) in loaded {
+                log::debug!("Loaded replacement texture: {}", hash.to_string());
+                // The texture is now in cache and will be used on next access
+            }
+        }
+    }
+    
+    /// Get texture replacement configuration
+    pub fn texture_replacement_config(&self) -> Option<TextureReplacementConfig> {
+        self.texture_replacement.as_ref().map(|sys| sys.config())
+    }
+    
+    /// Update texture replacement configuration
+    pub fn update_texture_replacement_config(&mut self, config: TextureReplacementConfig) {
+        if let Some(ref mut tex_sys) = self.texture_replacement {
+            tex_sys.update_config(config);
+        }
+    }
+
     /// Set rendering pipeline mode (Enhanced/Original)
     pub fn set_rendering_mode(&mut self, mode: RenderingMode) {
         self.rendering_pipeline.set_mode(mode);
@@ -265,7 +377,102 @@ impl Gpu {
     pub fn set_color_banding(&mut self, enabled: bool) {
         self.rendering_pipeline.set_color_banding(enabled);
     }
+    
+    /// Set frame pacing display mode
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        self.frame_pacer.set_mode(mode);
+    }
+    
+    /// Enable/disable black frame insertion
+    pub fn set_black_frame_insertion(&mut self, enabled: bool) {
+        self.frame_pacer.enable_black_frame_insertion(enabled);
+    }
+    
+    /// Enable/disable motion interpolation for 120Hz+ displays
+    pub fn set_motion_interpolation(&mut self, enabled: bool) {
+        self.frame_pacer.enable_motion_interpolation(enabled);
+    }
+    
+    /// Set beam racing offset for CRT-like latency
+    pub fn set_beam_racing_offset(&mut self, offset: u32) {
+        self.frame_pacer.set_beam_racing_offset(offset);
+    }
+    
+    /// Get frame pacing statistics
+    pub fn get_frame_pacing_stats(&self) -> FramePacingStats {
+        self.frame_pacer.get_stats()
+    }
+    
+    /// Get display capabilities
+    pub fn get_display_capabilities(&mut self) -> DisplayCapabilities {
+        self.frame_pacer.detect_display_capabilities()
+    }
+    
+    /// Get current speed adjustment for host sync
+    pub fn get_speed_adjustment(&self) -> f64 {
+        self.frame_pacer.get_speed_adjustment()
+    }
+    
+    /// Get audio resample ratio for sync
+    pub fn get_audio_resample_ratio(&self) -> f64 {
+        self.frame_pacer.get_audio_resample_ratio()
+    }
 
+    /// Initialize CRT beam simulation renderer
+    pub fn init_crt_beam_renderer(&mut self, width: u32, height: u32) -> Result<(), String> {
+        match CrtBeamRenderer::new(width, height) {
+            Ok(renderer) => {
+                log::info!("CRT Beam Renderer initialized at {}x{}", width, height);
+                self.crt_beam_renderer = Some(renderer);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to initialize CRT Beam Renderer: {}", e);
+                Err(e)
+            }
+        }
+    }
+    
+    /// Set CRT beam configuration
+    pub fn set_crt_beam_config(&mut self, config: CrtBeamConfig) {
+        self.crt_beam_config = config.clone();
+        if let Some(ref mut renderer) = self.crt_beam_renderer {
+            renderer.set_config(config);
+        }
+    }
+    
+    /// Get current CRT beam configuration
+    pub fn get_crt_beam_config(&self) -> &CrtBeamConfig {
+        &self.crt_beam_config
+    }
+    
+    /// Apply CRT beam preset
+    pub fn apply_crt_beam_preset(&mut self, preset: CrtBeamPreset) {
+        let config = match preset {
+            CrtBeamPreset::Default => CrtBeamConfig::default(),
+            CrtBeamPreset::Hz120 => CrtBeamConfig::preset_120hz(),
+            CrtBeamPreset::Hz240Oled => CrtBeamConfig::preset_240hz_oled(),
+            CrtBeamPreset::Hdr => CrtBeamConfig::preset_hdr(),
+            CrtBeamPreset::MaxMotionClarity => CrtBeamConfig::preset_max_motion_clarity(),
+            CrtBeamPreset::AuthenticCrt => CrtBeamConfig::preset_authentic_crt(),
+        };
+        self.set_crt_beam_config(config);
+    }
+    
+    /// Process frame through CRT beam renderer if enabled
+    pub fn apply_crt_beam_effect(&mut self, input_texture: u32, time: f64) -> Option<u32> {
+        if let Some(ref mut renderer) = self.crt_beam_renderer {
+            Some(renderer.render(input_texture, time))
+        } else {
+            None
+        }
+    }
+    
+    /// Get CRT beam renderer metrics
+    pub fn get_crt_beam_metrics(&self) -> Option<crt_beam_renderer::CrtBeamMetrics> {
+        self.crt_beam_renderer.as_ref().map(|r| r.get_metrics())
+    }
+    
     /// Initialize shader cache system
     pub fn init_shader_cache(&mut self, cache_dir: std::path::PathBuf, backend: shader_cache::ShaderBackend) {
         match ShaderManager::new(cache_dir, backend) {
