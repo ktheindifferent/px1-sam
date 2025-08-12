@@ -183,6 +183,12 @@ features = [
   "WorkerGlobalScope",
 ]
 
+[features]
+default = []
+pgxp = []
+debugger = []
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [profile.release]
 opt-level = "s"

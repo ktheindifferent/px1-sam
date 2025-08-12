@@ -26,6 +26,9 @@ pub mod opengl_shader;
 #[cfg(feature = "vulkan-renderer")]
 pub mod vulkan_renderer;
 
+#[cfg(feature = "debugger")]
+pub mod pipeline_debugger;
+
 #[cfg(test)]
 mod error_handler_tests;
 #[cfg(test)]
