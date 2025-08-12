@@ -13,6 +13,8 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -25,18 +27,34 @@ wasm-logger = "0.2"
 bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
+# Texture replacement dependencies  
+sha2 = "0.10"
+image = "0.24"
+flate2 = "1.0"
+zip = "0.6"
+
+# Database and compatibility dependencies
 rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
-reqwest = { version = "0.11", features = ["json"], optional = true }
-tokio = { version = "1", features = ["rt", "macros"], optional = true }
+reqwest = { version = "0.11", features = ["json", "blocking"], optional = true }
+tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"], optional = true }
+toml = "0.8"
+dirs = "5.0"
 
 # Shader compilation dependencies
 crossbeam-channel = "0.5"
-sha2 = "0.10"
 hex = "0.4"
 bincode = "1.3"
 num_cpus = "1.16"
+
+# Testing dependencies
+backtrace = "0.3"
+
+# Rewind system dependencies
+zstd = "0.13"
+crc32fast = "1.3"
+fastrand = "2.0"
 
 # Vulkan dependencies
 ash = { version = "0.37", optional = true }
@@ -45,6 +63,9 @@ spirv-reflect = { version = "0.2", optional = true }
 
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
+
+[dev-dependencies]
+flexbuffers = "2.0"
 
 [dependencies.web-sys]
 version = "0.3"
@@ -56,8 +77,21 @@ features = [
   "HtmlElement",
   "Window",
   "CanvasRenderingContext2d",
+  "WebGl2RenderingContext",
+  "WebGlProgram",
+  "WebGlShader",
+  "WebGlTexture",
+  "WebGlBuffer",
+  "WebGlUniformLocation",
   "ImageData",
   "KeyboardEvent",
+  "MouseEvent",
+  "TouchEvent",
+  "Touch",
+  "TouchList",
+  "PointerEvent",
+  "WheelEvent",
+  "GamepadEvent",
   "AudioContext",
   "AudioBuffer",
   "AudioBufferSourceNode",
@@ -66,12 +100,30 @@ features = [
   "BaseAudioContext",
   "Gamepad",
   "GamepadButton",
+  "Navigator",
+  "Performance",
+  "Storage",
+  "IdbDatabase",
+  "IdbObjectStore",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbFactory",
+  "ServiceWorkerRegistration",
+  "ServiceWorkerContainer",
+  "Worker",
+  "MessagePort",
+  "OffscreenCanvas",
+  "Blob",
+  "File",
+  "FileReader",
+  "Url",
+  "UrlSearchParams",
+  "Response",
+  "RequestInit",
+  "RequestMode",
+  "Headers",
+  "WorkerGlobalScope",
 ]
-
-[features]
-default = []
-compatibility-db = ["rusqlite", "chrono", "uuid"]
-online-sync = ["reqwest", "tokio", "compatibility-db"]
 
 [profile.release]
 opt-level = "s"
