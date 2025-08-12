@@ -13,6 +13,8 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+game-library = ["rusqlite", "chrono", "uuid", "regex"]
+game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 compatibility-db = ["rusqlite", "chrono", "uuid"]
 online-sync = ["reqwest", "tokio", "compatibility-db"]
 
@@ -39,6 +41,8 @@ chrono = { version = "0.4", features = ["serde"], optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
 reqwest = { version = "0.11", features = ["json", "blocking"], optional = true }
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"], optional = true }
+regex = { version = "1.10", optional = true }
+async-trait = { version = "0.1", optional = true }
 flexbuffers = "25.2.10"
 toml = "0.8"
 dirs = "5.0"
@@ -67,6 +71,7 @@ gl = { version = "0.14", optional = true }
 
 [dev-dependencies]
 flexbuffers = "2.0"
+tempfile = "3.8"
 
 [dependencies.web-sys]
 version = "0.3"
@@ -132,3 +137,4 @@ lto = true
 
 [package.metadata.wasm-pack]
 wasm-opt = false
+

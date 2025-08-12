@@ -53,6 +53,9 @@ mod psx_memory_card_integration;
 mod rewind;
 mod rewind_integration;
 mod achievement;
+
+#[cfg(feature = "game-library")]
+pub mod game_library;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
