@@ -14,7 +14,7 @@ impl Msf {
     pub fn new(m: u8, s: u8, f: u8) -> Self {
         Msf { m, s, f }
     }
-    
+
     pub fn from_bcd(bcd: Bcd) -> Self {
         Msf {
             m: bcd.0,
@@ -22,12 +22,12 @@ impl Msf {
             f: 0,
         }
     }
-    
+
     pub fn to_sector_index(&self) -> u32 {
         let m = self.m as u32;
         let s = self.s as u32;
         let f = self.f as u32;
-        
+
         // MSF to sector: (M * 60 + S) * 75 + F - 150
         if m * 60 + s >= 2 {
             (m * 60 + s - 2) * 75 + f
@@ -44,13 +44,13 @@ impl Bcd {
     pub fn new(val: u8) -> Self {
         Bcd(val)
     }
-    
+
     pub fn from_binary(val: u8) -> Self {
         let tens = val / 10;
         let ones = val % 10;
         Bcd((tens << 4) | ones)
     }
-    
+
     pub fn to_binary(&self) -> u8 {
         let tens = (self.0 >> 4) & 0xf;
         let ones = self.0 & 0xf;
@@ -90,7 +90,7 @@ impl Sector {
             mode: 2,
         }
     }
-    
+
     pub fn data_2048(&self) -> &[u8] {
         if self.data.len() >= 2048 {
             &self.data[0..2048]
@@ -141,7 +141,7 @@ impl Image for StubDisc {
             Err(CdError("Sector out of range".to_string()))
         }
     }
-    
+
     fn track_count(&self) -> u8 {
         1
     }
@@ -169,13 +169,11 @@ pub enum TrackType {
 impl Default for Toc {
     fn default() -> Self {
         Toc {
-            tracks: vec![
-                Track {
-                    number: 1,
-                    start: Msf::new(0, 2, 0),
-                    track_type: TrackType::Data,
-                }
-            ],
+            tracks: vec![Track {
+                number: 1,
+                start: Msf::new(0, 2, 0),
+                track_type: TrackType::Data,
+            }],
         }
     }
 }
@@ -197,5 +195,5 @@ pub struct XaCodingAudio {
 pub mod sector {
     // Re-export sector-related types (currently unused but may be needed later)
     #[allow(unused_imports)]
-    pub use super::{XaSamplingFreq, XaBitsPerSample, XaCodingAudio, Sector};
+    pub use super::{Sector, XaBitsPerSample, XaCodingAudio, XaSamplingFreq};
 }
