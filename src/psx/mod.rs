@@ -21,6 +21,7 @@ mod gte;
 mod irq;
 mod link_cable;
 mod mdec;
+mod memory_bus;
 mod memory_control;
 pub mod memory_map;
 #[cfg(feature = "pgxp")]
@@ -30,7 +31,13 @@ pub mod pad_memcard;
 mod spu;
 mod sync;
 mod timers;
+mod vram;
 mod xmem;
+pub mod retroachievements;
+
+// ARM-specific optimizations
+#[cfg(target_arch = "aarch64")]
+pub mod arm_optimizer;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
@@ -74,6 +81,12 @@ pub struct Psx {
     cache_system: cache::CacheSystem,
     /// Enhanced memory control
     memory_ctrl: memory_control::MemoryControl,
+    /// Unified Memory Bus controller
+    memory_bus: memory_bus::MemoryBus,
+    /// Unified VRAM controller
+    vram: vram::Vram,
+    /// Cache coherency manager
+    cache_coherency: memory_bus::CacheCoherency,
     /// PGXP precision enhancement system
     #[cfg(feature = "pgxp")]
     #[serde(skip)]
@@ -92,6 +105,10 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// ARM optimization system (not serialized)
+    #[cfg(target_arch = "aarch64")]
+    #[serde(skip)]
+    arm_optimizer: arm_optimizer::ArmOptimizer,
 }
 
 impl Psx {
@@ -138,14 +155,26 @@ impl Psx {
             link_cable: link_cable::LinkCable::new(),
             cache_system: cache::CacheSystem::new(),
             memory_ctrl: memory_control::MemoryControl::new(),
+<<<<<<< HEAD
+            memory_bus: memory_bus::MemoryBus::new(),
+            vram: vram::Vram::new(),
+            cache_coherency: memory_bus::CacheCoherency::new(),
+=======
             #[cfg(feature = "pgxp")]
             pgxp: pgxp::Pgxp::new(),
+>>>>>>> main
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            #[cfg(target_arch = "aarch64")]
+            arm_optimizer: {
+                let mut optimizer = arm_optimizer::ArmOptimizer::new();
+                optimizer.initialize();
+                optimizer
+            },
         })
     }
 
@@ -220,6 +249,10 @@ impl Psx {
     pub fn run_frame(&mut self) {
         self.frame_done = false;
         while !self.frame_done {
+            // Process memory bus for this cycle
+            let bus_cycles = self.memory_bus.tick(self.cycle_counter);
+            self.tick(bus_cycles);
+
             if self.cpu_stalled_for_dma {
                 // Fast forward to the next event
                 self.cycle_counter = self.sync.first_event();
@@ -369,24 +402,38 @@ impl Psx {
     fn load<T: Addressable>(&mut self, address: u32) -> T {
         let abs_addr = map::mask_region(address);
 
+        // Apply memory mirroring
+        let physical_addr = self.memory_bus.apply_mirroring(abs_addr);
+
+        // Submit memory request to unified bus
+        self.memory_bus.request_access(
+            memory_bus::BusComponent::Cpu,
+            physical_addr,
+            memory_bus::AccessType::Read,
+            T::width(),
+            memory_bus::BusPriority::CpuData,
+            self.cycle_counter,
+            None,
+        );
+
+        // Get access latency from memory bus
+        let latency = self.memory_bus.get_access_latency(
+            physical_addr,
+            T::width(),
+            memory_bus::BusComponent::Cpu,
+        );
+
         // XXX Shouldn't we set dma_timing_penalty to 0 once we've "ticked" it? Mednafen doesn't do
         // it but I don't understand why not. Maybe it's just that the DMA is updated often enough
         // that it doesn't matter because the timing penalty is updated constantly?
-        self.tick(self.dma_timing_penalty);
+        self.tick(self.dma_timing_penalty + latency);
 
         if let Some(offset) = map::RAM.contains(abs_addr) {
-            // During DMA, CPU can still access RAM but with increased latency
-            let access_penalty = if self.cpu_stalled_for_dma {
-                // CPU is stalled, this shouldn't happen
-                0
-            } else if self.dma_timing_penalty > 0 {
-                // DMA is active, RAM access is slower
-                5
-            } else {
-                // Normal RAM access
-                3
-            };
-            self.tick(access_penalty);
+            // Check cache coherency
+            if self.cache_coherency.needs_invalidation(memory_bus::CacheType::Data) {
+                self.cache_system.invalidate_dcache();
+                self.cache_coherency.mark_synchronized(memory_bus::CacheType::Data);
+            }
             return self.xmem.ram_load(offset);
         }
 
@@ -512,6 +559,31 @@ impl Psx {
     /// Decode `address` and perform the store to the target module
     fn store<T: Addressable>(&mut self, address: u32, val: T) {
         let abs_addr = map::mask_region(address);
+
+        // Apply memory mirroring
+        let physical_addr = self.memory_bus.apply_mirroring(abs_addr);
+
+        // Submit memory request to unified bus
+        self.memory_bus.request_access(
+            memory_bus::BusComponent::Cpu,
+            physical_addr,
+            memory_bus::AccessType::Write,
+            T::width(),
+            memory_bus::BusPriority::CpuData,
+            self.cycle_counter,
+            Some(val.as_u32()),
+        );
+
+        // Invalidate caches on write
+        self.cache_coherency.invalidate_on_write(physical_addr, memory_bus::BusComponent::Cpu);
+
+        // Get access latency
+        let latency = self.memory_bus.get_access_latency(
+            physical_addr,
+            T::width(),
+            memory_bus::BusComponent::Cpu,
+        );
+        self.tick(latency);
 
         if let Some(offset) = map::RAM.contains(abs_addr) {
             self.xmem.ram_store(offset, val);

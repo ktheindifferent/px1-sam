@@ -371,4 +371,16 @@ impl CacheSystem {
         }
         result
     }
+
+    /// Invalidate instruction cache
+    pub fn invalidate_icache(&mut self) {
+        self.icache.invalidate();
+    }
+
+    /// Invalidate data cache (conceptual for scratchpad)
+    pub fn invalidate_dcache(&mut self) {
+        // Scratchpad doesn't have cache lines to invalidate,
+        // but we can clear the enabled flag temporarily
+        debug!("D-cache invalidation requested");
+    }
 }
