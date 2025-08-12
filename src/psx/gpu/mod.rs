@@ -9,6 +9,7 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod texture_upscaling;
 pub mod crt_shaders;
 pub mod crt_shader_pipeline;
 pub mod frame_interpolation;
@@ -40,6 +41,8 @@ use crate::frame_pacing::FramePacer;
 pub use crate::frame_pacing::{DisplayMode, DisplayCapabilities, FramePacingStats};
 use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
 use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
 
@@ -149,6 +152,8 @@ pub struct Gpu {
     frame_pacer: FramePacer,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// AI texture upscaling system
+    texture_upscaler: Option<texture_upscaling::TextureUpscalingSystem>,
     /// Clock multiplier for dynamic GPU clock scaling
     pub clock_multiplier: f32,
     /// Revolutionary CRT beam simulation renderer
@@ -207,6 +212,7 @@ impl Gpu {
             rendering_pipeline: RenderingPipeline::new(),
             frame_pacer: FramePacer::new(),
             shader_manager: None,
+            texture_upscaler: None,
             clock_multiplier: 1.0,
             crt_beam_renderer: None,
             crt_beam_config: CrtBeamConfig::default(),
@@ -510,6 +516,82 @@ impl Gpu {
         self.shader_manager.as_mut()
             .ok_or_else(|| "Shader manager not initialized".to_string())?
             .import_shader_pack(pack_path)
+    }
+    
+    /// Initialize AI texture upscaling system
+    pub fn init_texture_upscaling(&mut self, config: texture_upscaling::UpscalingConfig) -> Result<(), String> {
+        match texture_upscaling::TextureUpscalingSystem::new(config) {
+            Ok(system) => {
+                log::info!("AI texture upscaling system initialized");
+                self.texture_upscaler = Some(system);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to initialize texture upscaling: {}", e);
+                Err(e)
+            }
+        }
+    }
+    
+    /// Process texture for AI upscaling
+    pub fn upscale_texture(&self, texture_data: &[u8], width: u32, height: u32, is_ui: bool) -> Result<texture_upscaling::UpscaledTexture, String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .process_texture(texture_data, width, height, is_ui)
+    }
+    
+    /// Update texture upscaling configuration
+    pub fn update_upscaling_config(&self, config: texture_upscaling::UpscalingConfig) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .update_config(config)
+    }
+    
+    /// Load AI model for texture upscaling
+    pub fn load_upscaling_model(&self, model_type: texture_upscaling::ModelType) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .load_model(model_type)
+    }
+    
+    /// Start batch texture processing
+    pub fn start_batch_texture_processing(&self, input_dir: std::path::PathBuf) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .start_batch_processing(input_dir)
+    }
+    
+    /// Export upscaled texture pack
+    pub fn export_texture_pack(&self, output_path: std::path::PathBuf) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .export_texture_pack(output_path)
+    }
+    
+    /// Download community model
+    pub fn download_community_model(&self, model_id: &str) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .download_community_model(model_id)
+    }
+    
+    /// Share model to community
+    pub fn share_upscaling_model(&self, model_path: std::path::PathBuf, metadata: std::collections::HashMap<String, String>) -> Result<String, String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .share_model(model_path, metadata)
+    }
+    
+    /// Get texture upscaling statistics
+    pub fn get_upscaling_stats(&self) -> Option<texture_upscaling::UpscalingStats> {
+        self.texture_upscaler.as_ref().map(|s| s.get_stats())
+    }
+    
+    /// Clear texture upscaling cache
+    pub fn clear_upscaling_cache(&self) {
+        if let Some(ref upscaler) = self.texture_upscaler {
+            upscaler.clear_cache();
+        }
     }
 
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer
