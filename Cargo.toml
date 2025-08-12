@@ -13,6 +13,10 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+compatibility-db = ["rusqlite", "chrono", "uuid"]
+online-sync = ["reqwest", "tokio", "compatibility-db"]
+netplay = ["tokio", "quinn", "webrtc", "igd"]
+fightcade = ["netplay"]
 tracy = ["dep:tracy-client"]
 optick = ["dep:optick"]
 discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
@@ -42,6 +46,8 @@ zip = "0.6"
 rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+reqwest = { version = "0.11", features = ["json"], optional = true }
+tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time"], optional = true }
 reqwest = { version = "0.11", features = ["json", "blocking"], optional = true }
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"], optional = true }
 regex = { version = "1.10", optional = true }
@@ -80,6 +86,20 @@ base64 = "0.21"
 
 # Missing dependencies
 cdimage = "0.1"
+
+# GGPO Netplay dependencies
+flate2 = "1.0"
+crc32fast = "1.3"
+ring = "0.17"
+quinn = { version = "0.10", optional = true }
+webrtc = { version = "0.9", optional = true }
+igd = { version = "0.12", optional = true }
+stun_codec = { version = "0.3", optional = true }
+parking_lot = "0.12"
+dashmap = "5.5"
+bytes = "1.5"
+futures = "0.3"
+async-trait = "0.1"
 
 # Vulkan dependencies
 ash = { version = "0.37", optional = true }
@@ -153,6 +173,7 @@ features = [
   "Headers",
   "WorkerGlobalScope",
 ]
+
 
 [profile.release]
 opt-level = "s"
