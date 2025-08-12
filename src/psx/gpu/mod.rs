@@ -17,6 +17,7 @@ pub mod crt_shader_pipeline;
 pub mod frame_interpolation;
 pub mod optical_flow;
 pub mod crt_beam_renderer;
+pub mod pixel_scaling;
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan_shader;
@@ -40,6 +41,8 @@ mod shader_cache_test;
 mod memory_prefetch_test;
 #[cfg(test)]
 mod frame_interpolation_tests;
+#[cfg(test)]
+mod pixel_scaling_tests;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
@@ -56,6 +59,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
 use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
+use pixel_scaling::{PixelScalingSystem, ScalingConfig, FilterType, FilterChainEditor};
 
 // Re-export ColorDepth for use in rasterizer
 use self::ColorDepth;
@@ -173,6 +177,10 @@ pub struct Gpu {
     crt_beam_renderer: Option<CrtBeamRenderer>,
     /// CRT beam configuration
     crt_beam_config: CrtBeamConfig,
+    /// Advanced pixel art scaling system
+    pixel_scaling: Option<PixelScalingSystem>,
+    /// Filter chain editor for custom scaling pipelines
+    filter_chain_editor: FilterChainEditor,
 }
 
 impl Gpu {
@@ -242,6 +250,8 @@ impl Gpu {
             clock_multiplier: 1.0,
             crt_beam_renderer: None,
             crt_beam_config: CrtBeamConfig::default(),
+            pixel_scaling: None,
+            filter_chain_editor: FilterChainEditor::new(),
         };
 
         // Detect display capabilities and set up frame pacing
@@ -1846,4 +1856,99 @@ impl Gpu {
     pub fn set_vertex_cache_size(&mut self, size: usize) {
         self.set_rasterizer_option(RasterizerOption::VertexCacheSize(size));
     }
+    
+    /// Initialize pixel scaling system
+    pub fn init_pixel_scaling(&mut self, config: ScalingConfig) {
+        log::info!("Initializing pixel scaling system with filter: {:?}", config.filter_type);
+        self.pixel_scaling = Some(PixelScalingSystem::new(config));
+    }
+    
+    /// Process texture through pixel scaling filters
+    pub fn scale_texture(&mut self, texture_data: &[u32], width: u32, height: u32, texture_hash: u64) -> Option<Arc<pixel_scaling::ScaledTexture>> {
+        self.pixel_scaling.as_mut().map(|ps| ps.process_texture(texture_data, width, height, texture_hash))
+    }
+    
+    /// Set pixel scaling filter type
+    pub fn set_pixel_filter(&mut self, filter: FilterType) {
+        if let Some(ref mut ps) = self.pixel_scaling {
+            let mut config = ScalingConfig::default();
+            config.filter_type = filter;
+            ps.update_config(config);
+        }
+    }
+    
+    /// Set per-texture filter override
+    pub fn set_texture_filter(&mut self, texture_hash: u64, filter: FilterType) {
+        if let Some(ref mut ps) = self.pixel_scaling {
+            ps.set_per_texture_filter(texture_hash, filter);
+        }
+    }
+    
+    /// Switch pixel filter in real-time
+    pub fn switch_filter(&mut self, filter: FilterType) {
+        log::info!("Switching to filter: {:?}", filter);
+        self.set_pixel_filter(filter);
+        
+        // Clear texture cache to apply new filter
+        if let Some(ref mut ps) = self.pixel_scaling {
+            ps.clear_texture_cache();
+        }
+    }
+    
+    /// Get pixel scaling metrics
+    pub fn get_scaling_metrics(&self) -> Option<&pixel_scaling::ScalingMetrics> {
+        self.pixel_scaling.as_ref().map(|ps| ps.get_metrics())
+    }
+    
+    /// Access filter chain editor
+    pub fn filter_chain_editor(&mut self) -> &mut FilterChainEditor {
+        &mut self.filter_chain_editor
+    }
+    
+    /// Apply filter chain to texture
+    pub fn apply_filter_chain(&mut self, texture_data: &[u32], width: u32, height: u32) -> Vec<u32> {
+        if let Some(chain) = self.filter_chain_editor.export_chain() {
+            let mut result = texture_data.to_vec();
+            let mut current_width = width;
+            let mut current_height = height;
+            
+            for stage in chain.stages.iter().filter(|s| s.enabled) {
+                if let Some(ref mut ps) = self.pixel_scaling {
+                    // Process through individual filter
+                    let scaled = ps.process_texture(&result, current_width, current_height, 0);
+                    result = scaled.data.clone();
+                    current_width = scaled.width;
+                    current_height = scaled.height;
+                    
+                    // Apply opacity if less than 1.0
+                    if stage.opacity < 1.0 {
+                        // Blend with original based on opacity
+                        for i in 0..result.len() {
+                            let original = texture_data.get(i).copied().unwrap_or(0);
+                            result[i] = blend_with_opacity(result[i], original, stage.opacity);
+                        }
+                    }
+                }
+            }
+            result
+        } else {
+            texture_data.to_vec()
+        }
+    }
+}
+
+fn blend_with_opacity(src: u32, dst: u32, opacity: f32) -> u32 {
+    let r1 = ((src >> 16) & 0xFF) as f32;
+    let g1 = ((src >> 8) & 0xFF) as f32;
+    let b1 = (src & 0xFF) as f32;
+    
+    let r2 = ((dst >> 16) & 0xFF) as f32;
+    let g2 = ((dst >> 8) & 0xFF) as f32;
+    let b2 = (dst & 0xFF) as f32;
+    
+    let r = (r1 * opacity + r2 * (1.0 - opacity)) as u32;
+    let g = (g1 * opacity + g2 * (1.0 - opacity)) as u32;
+    let b = (b1 * opacity + b2 * (1.0 - opacity)) as u32;
+    
+    0xFF000000 | (r << 16) | (g << 8) | b
 }
