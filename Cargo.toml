@@ -64,6 +64,9 @@ spirv-reflect = { version = "0.2", optional = true }
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
 
+[dev-dependencies]
+flexbuffers = "2.0"
+
 [dependencies.web-sys]
 version = "0.3"
 features = [
