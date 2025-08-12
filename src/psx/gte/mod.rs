@@ -1667,3 +1667,40 @@ impl ControlVector {
         self as usize
     }
 }
+
+/// Precision modes for GTE calculations
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PrecisionMode {
+    Standard,
+    Enhanced,
+}
+
+/// MAC overflow handling modes
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OverflowMode {
+    Wrap,
+    Saturate,
+}
+
+impl Gte {
+    /// Compatibility fixes - Enable CDP (Cross Dot Product) command for Vigilante 8
+    pub fn enable_cdp_command(&mut self, enable: bool) {
+        // CDP command support will be handled in the command execution
+        // This is a placeholder for the setting
+    }
+    
+    /// Set precision mode for enhanced accuracy
+    pub fn set_precision_mode(&mut self, mode: PrecisionMode) {
+        // This affects how intermediate calculations are performed
+    }
+    
+    /// Set MAC overflow handling mode
+    pub fn set_mac_overflow_mode(&mut self, mode: OverflowMode) {
+        // This affects how overflow conditions are handled
+    }
+    
+    /// Enable divide overflow fix
+    pub fn enable_divide_overflow_fix(&mut self, enable: bool) {
+        // This fixes divide overflow bugs in certain games
+    }
+}

@@ -9,6 +9,12 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod memory_prefetch;
+pub mod prefetch_benchmark;
+pub mod texture_upscaling;
+pub mod crt_shaders;
+pub mod crt_shader_pipeline;
+pub mod frame_interpolation;
 pub mod crt_beam_renderer;
 
 #[cfg(feature = "vulkan")]
@@ -20,24 +26,32 @@ pub mod opengl_shader;
 #[cfg(feature = "vulkan-renderer")]
 pub mod vulkan_renderer;
 
+#[cfg(feature = "debugger")]
+pub mod pipeline_debugger;
+
 #[cfg(test)]
 mod error_handler_tests;
 #[cfg(test)]
 mod rendering_test;
 #[cfg(test)]
 mod shader_cache_test;
+#[cfg(test)]
+mod memory_prefetch_test;
 
 use super::cpu::CPU_FREQ_HZ;
 use super::{irq, sync, timers, AccessWidth, Addressable, CycleCount, Psx};
 use commands::{Command, Position};
 pub use rasterizer::{Frame, Pixel, RasterizerOption};
-pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
 use crate::frame_pacing::FramePacer;
 pub use crate::frame_pacing::{DisplayMode, DisplayCapabilities, FramePacingStats};
 use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use memory_prefetch::{GpuMemoryPrefetcher, PrefetchConfig, MemoryAccess, AccessType};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
 use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
 
 // Re-export ColorDepth for use in rasterizer
@@ -146,6 +160,12 @@ pub struct Gpu {
     frame_pacer: FramePacer,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// GPU memory prefetching system
+    memory_prefetcher: GpuMemoryPrefetcher,
+    /// AI texture upscaling system
+    texture_upscaler: Option<texture_upscaling::TextureUpscalingSystem>,
+    /// Clock multiplier for dynamic GPU clock scaling
+    pub clock_multiplier: f32,
     /// Revolutionary CRT beam simulation renderer
     crt_beam_renderer: Option<CrtBeamRenderer>,
     /// CRT beam configuration
@@ -155,6 +175,18 @@ pub struct Gpu {
 impl Gpu {
     pub fn new(video_standard: VideoStandard) -> Gpu {
         log::info!("GPU: Initializing with video standard: {:?}", video_standard);
+        
+        // Initialize memory prefetcher with optimized config
+        let prefetch_config = PrefetchConfig {
+            max_prefetch_distance: 16,
+            l2_cache_size: 2 * 1024 * 1024, // 2MB L2 cache
+            shared_memory_size: 64 * 1024,   // 64KB shared memory
+            enable_pattern_learning: true,
+            enable_profile_guided: true,
+            target_stall_reduction: 50.0,
+            warp_size: 32,
+            aggressiveness: 0.75,
+        };
         
         let mut gpu = Gpu {
             state: State::Idle,
@@ -202,6 +234,9 @@ impl Gpu {
             rendering_pipeline: RenderingPipeline::new(),
             frame_pacer: FramePacer::new(),
             shader_manager: None,
+            memory_prefetcher: GpuMemoryPrefetcher::new(prefetch_config),
+            texture_upscaler: None,
+            clock_multiplier: 1.0,
             crt_beam_renderer: None,
             crt_beam_config: CrtBeamConfig::default(),
         };
@@ -504,6 +539,120 @@ impl Gpu {
         self.shader_manager.as_mut()
             .ok_or_else(|| "Shader manager not initialized".to_string())?
             .import_shader_pack(pack_path)
+    }
+    
+    /// Configure memory prefetcher
+    pub fn configure_prefetcher(&mut self, config: PrefetchConfig) {
+        self.memory_prefetcher = GpuMemoryPrefetcher::new(config);
+        log::info!("GPU: Memory prefetcher reconfigured");
+    }
+    
+    /// Get memory prefetch statistics
+    pub fn get_prefetch_stats(&self) -> memory_prefetch::PrefetchStats {
+        self.memory_prefetcher.get_stats()
+    }
+    
+    /// Prefetch texture data for upcoming draw operations
+    fn prefetch_texture_data(&mut self, tex_x: u16, tex_y: u16, width: u16, height: u16) {
+        // Calculate VRAM address for texture
+        let vram_addr = (tex_y as u64 * 1024 + tex_x as u64) * 2; // 2 bytes per pixel
+        
+        // Trigger texture prefetch
+        self.memory_prefetcher.prefetch_texture(
+            vram_addr,
+            width as usize,
+            height as usize,
+            2, // 16-bit color format
+        );
+    }
+    
+    /// Process memory access through prefetcher
+    fn access_vram_with_prefetch(&mut self, address: u64, size: usize, access_type: AccessType) -> Option<Vec<u8>> {
+        let access = MemoryAccess {
+            address,
+            size,
+            timestamp: std::time::Instant::now(),
+            access_type,
+            warp_id: 0, // Single warp for PSX GPU
+        };
+        
+        self.memory_prefetcher.access_memory(access)
+    }
+
+    /// Initialize AI texture upscaling system
+    pub fn init_texture_upscaling(&mut self, config: texture_upscaling::UpscalingConfig) -> Result<(), String> {
+        match texture_upscaling::TextureUpscalingSystem::new(config) {
+            Ok(system) => {
+                log::info!("AI texture upscaling system initialized");
+                self.texture_upscaler = Some(system);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to initialize texture upscaling: {}", e);
+                Err(e)
+            }
+        }
+    }
+    
+    /// Process texture for AI upscaling
+    pub fn upscale_texture(&self, texture_data: &[u8], width: u32, height: u32, is_ui: bool) -> Result<texture_upscaling::UpscaledTexture, String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .process_texture(texture_data, width, height, is_ui)
+    }
+    
+    /// Update texture upscaling configuration
+    pub fn update_upscaling_config(&self, config: texture_upscaling::UpscalingConfig) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .update_config(config)
+    }
+    
+    /// Load AI model for texture upscaling
+    pub fn load_upscaling_model(&self, model_type: texture_upscaling::ModelType) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .load_model(model_type)
+    }
+    
+    /// Start batch texture processing
+    pub fn start_batch_texture_processing(&self, input_dir: std::path::PathBuf) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .start_batch_processing(input_dir)
+    }
+    
+    /// Export upscaled texture pack
+    pub fn export_texture_pack(&self, output_path: std::path::PathBuf) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .export_texture_pack(output_path)
+    }
+    
+    /// Download community model
+    pub fn download_community_model(&self, model_id: &str) -> Result<(), String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .download_community_model(model_id)
+    }
+    
+    /// Share model to community
+    pub fn share_upscaling_model(&self, model_path: std::path::PathBuf, metadata: std::collections::HashMap<String, String>) -> Result<String, String> {
+        self.texture_upscaler.as_ref()
+            .ok_or_else(|| "Texture upscaling not initialized".to_string())?
+            .share_model(model_path, metadata)
+    }
+    
+    /// Get texture upscaling statistics
+    pub fn get_upscaling_stats(&self) -> Option<texture_upscaling::UpscalingStats> {
+        self.texture_upscaler.as_ref().map(|s| s.get_stats())
+    }
+    
+    /// Clear texture upscaling cache
+    pub fn clear_upscaling_cache(&self) {
+        if let Some(ref upscaler) = self.texture_upscaler {
+            upscaler.clear_cache();
+        }
     }
 
     /// Pop a command from the `command_fifo` and return it while also sending it to the rasterizer
@@ -966,6 +1115,21 @@ fn draw_frame(psx: &mut Psx) {
     // Update debug overlay before sending frame
     psx.gpu.update_debug_overlay();
     
+    // Log prefetch statistics periodically
+    static mut FRAME_COUNT: u32 = 0;
+    unsafe {
+        FRAME_COUNT += 1;
+        if FRAME_COUNT % 60 == 0 { // Every 60 frames (1 second at 60fps)
+            let stats = psx.gpu.get_prefetch_stats();
+            log::info!(
+                "GPU Memory Prefetch Stats - Hit Rate: {:.1}%, Stall Reduction: {:.1}%, Prediction Accuracy: {:.1}%",
+                stats.hit_rate(),
+                stats.stall_reduction(),
+                stats.prediction_accuracy()
+            );
+        }
+    }
+    
     psx.gpu.rasterizer.end_of_frame();
     psx.gpu.frame_drawn = true;
     psx.frame_done = true;
@@ -1178,9 +1342,48 @@ fn run_next_command(psx: &mut Psx) {
     if !command.out_of_band {
         psx.gpu.draw_time(2);
     }
+    
+    // Prefetch texture data if this is a textured draw command
+    prefetch_for_command(psx);
 
     // Invoke the callback to actually implement the command with error handling
     execute_command_with_error_handling(psx, command);
+}
+
+/// Prefetch texture data for upcoming draw command
+fn prefetch_for_command(psx: &mut Psx) {
+    if psx.gpu.command_fifo.is_empty() {
+        return;
+    }
+    
+    let opcode = psx.gpu.command_fifo.peek() >> 24;
+    
+    // Check if this is a textured primitive (opcodes 0x24-0x27, 0x2C-0x2F, 0x34-0x37, 0x3C-0x3F)
+    let is_textured = matches!(opcode, 
+        0x24..=0x27 | 0x2C..=0x2F | 0x34..=0x37 | 0x3C..=0x3F
+    );
+    
+    if is_textured && !psx.gpu.draw_mode.texture_disable() {
+        // Get texture page coordinates
+        let tex_page_x = psx.gpu.draw_mode.texture_page_x();
+        let tex_page_y = psx.gpu.draw_mode.texture_page_y();
+        
+        // Prefetch the texture page (256x256 for standard page)
+        psx.gpu.prefetch_texture_data(tex_page_x, tex_page_y, 256, 256);
+        
+        // Also prefetch CLUT if using paletted textures
+        let tex_depth = psx.gpu.draw_mode.texture_depth();
+        if tex_depth < 2 { // 4bpp or 8bpp paletted
+            // CLUT is typically in the upper part of VRAM
+            // This is a simplified prefetch - actual CLUT location varies
+            psx.gpu.memory_prefetcher.prefetch_texture(
+                0x1F800000, // CLUT base address
+                256,        // CLUT width
+                1,          // CLUT height
+                2,          // 16-bit entries
+            );
+        }
+    }
 }
 
 /// Execute a GPU command with proper error handling
@@ -1572,3 +1775,72 @@ const GPU_CYCLES_PER_CPU_CYCLES_PAL: u64 =
 const GPU_FREQ_NTSC_HZ: f64 = 53_693_181.818;
 /// GPU frequency for PAL consoles (Europe)
 const GPU_FREQ_PAL_HZ: f64 = 53_203_425.;
+
+/// Precision modes for geometry rendering
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Precision {
+    Standard,
+    Enhanced,
+}
+
+/// CLUT access modes for compatibility
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClutMode {
+    Normal,
+    SafeWithWrap,
+}
+
+/// Invalid command handling modes
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InvalidCmdMode {
+    Warn,
+    Ignore,
+}
+
+impl Gpu {
+    /// Compatibility fixes - set geometry precision
+    pub fn set_geometry_precision(&mut self, precision: Precision) {
+        match precision {
+            Precision::Enhanced => {
+                // Enhanced precision for Final Fantasy VIII
+                self.set_subpixel_precision(true);
+                // Store precision setting for use in rendering
+                self.set_rasterizer_option(RasterizerOption::EnhancedPrecision(true));
+            }
+            Precision::Standard => {
+                self.set_subpixel_precision(false);
+                self.set_rasterizer_option(RasterizerOption::EnhancedPrecision(false));
+            }
+        }
+    }
+    
+    /// Enable perspective correction for textures
+    pub fn enable_perspective_correction(&mut self, enable: bool) {
+        // Store setting for use in texture rendering
+        self.set_rasterizer_option(RasterizerOption::PerspectiveCorrection(enable));
+    }
+    
+    /// Set CLUT access mode for Dino Crisis 2 fixes
+    pub fn set_clut_access_mode(&mut self, mode: ClutMode) {
+        // This will be used in CLUT access handling
+        let safe_mode = mode == ClutMode::SafeWithWrap;
+        self.set_rasterizer_option(RasterizerOption::SafeClutMode(safe_mode));
+    }
+    
+    /// Set invalid command handling mode for Castlevania
+    pub fn set_invalid_command_handling(&mut self, mode: InvalidCmdMode) {
+        // This affects how invalid draw commands are processed
+        let ignore_invalid = mode == InvalidCmdMode::Ignore;
+        self.set_rasterizer_option(RasterizerOption::IgnoreInvalidCommands(ignore_invalid));
+    }
+    
+    /// Allow zero-size primitives for compatibility
+    pub fn allow_zero_size_primitives(&mut self, allow: bool) {
+        self.set_rasterizer_option(RasterizerOption::AllowZeroSizePrimitives(allow));
+    }
+    
+    /// Set vertex cache size for enhanced performance
+    pub fn set_vertex_cache_size(&mut self, size: usize) {
+        self.set_rasterizer_option(RasterizerOption::VertexCacheSize(size));
+    }
+}

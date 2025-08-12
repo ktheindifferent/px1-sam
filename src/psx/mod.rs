@@ -2,6 +2,7 @@
 
 pub mod bios;
 pub mod cd;
+pub mod compatibility;
 pub mod cop0;
 pub mod cop0_enhanced;
 pub mod cpu;
@@ -17,6 +18,7 @@ mod cache;
 mod dma;
 mod expansion;
 pub mod gpu;
+pub mod ggpo;
 mod gte;
 mod irq;
 mod link_cable;
@@ -33,13 +35,26 @@ mod sync;
 mod timers;
 mod vram;
 mod xmem;
+pub mod zram;
+pub mod zram_config;
+pub mod run_ahead;
+pub mod fast_savestate;
+pub mod run_ahead_integration;
+pub mod power_management;
+pub mod framerate_controller;
+pub mod display_sync;
 pub mod retroachievements;
+
+// ARM-specific optimizations
+#[cfg(target_arch = "aarch64")]
+pub mod arm_optimizer;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
 pub use gpu::{Frame, VideoStandard};
 pub use overlay::{DeveloperOverlay, renderer::OverlayRenderData};
 pub use spu::{SpuDebugOverlay, interpolation};
+pub use zram::{ZramSystem, GpuMemoryCompressor, CompressionStats};
 use serde::de::{Deserialize, Deserializer};
 use std::cmp::min;
 
@@ -101,6 +116,31 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// ZRAM memory compression system (not serialized)
+    #[serde(skip)]
+    zram_system: zram::ZramSystem,
+    /// GPU memory compressor (not serialized)
+    #[serde(skip)]
+    gpu_compressor: zram::GpuMemoryCompressor,
+    /// Game compatibility manager (not serialized)
+    #[serde(skip)]
+    compatibility_manager: compatibility::CompatibilityManager,
+    /// GGPO netplay session (not serialized)
+    #[serde(skip)]
+    ggpo_session: Option<ggpo::GgpoSession>,
+    /// Dynamic power management system
+    #[serde(skip)]
+    pub power_management: Option<power_management::PowerManagement>,
+    /// Framerate controller
+    #[serde(skip)]
+    pub framerate_controller: Option<framerate_controller::FramerateController>,
+    /// Display synchronization
+    #[serde(skip)]
+    pub display_sync: Option<display_sync::DisplaySync>,
+    /// ARM optimization system (not serialized)
+    #[cfg(target_arch = "aarch64")]
+    #[serde(skip)]
+    arm_optimizer: arm_optimizer::ArmOptimizer,
 }
 
 impl Psx {
@@ -110,8 +150,16 @@ impl Psx {
         cdc_firmware: [u8; cd::CDC_ROM_SIZE],
     ) -> Result<Psx> {
         let standard = disc.region().video_standard();
+        let serial = disc.serial_number();
 
-        Psx::new_with_bios(Some(disc), bios, standard, cdc_firmware)
+        let mut psx = Psx::new_with_bios(Some(disc), bios, standard, cdc_firmware)?;
+        
+        // Detect game and apply compatibility patches
+        psx.compatibility_manager.detect_game(serial);
+        let profile = psx.compatibility_manager.current_profile().clone();
+        psx.apply_game_patches(&profile);
+        
+        Ok(psx)
     }
 
     pub fn new_with_bios(
@@ -147,20 +195,30 @@ impl Psx {
             link_cable: link_cable::LinkCable::new(),
             cache_system: cache::CacheSystem::new(),
             memory_ctrl: memory_control::MemoryControl::new(),
-<<<<<<< HEAD
             memory_bus: memory_bus::MemoryBus::new(),
             vram: vram::Vram::new(),
             cache_coherency: memory_bus::CacheCoherency::new(),
-=======
             #[cfg(feature = "pgxp")]
             pgxp: pgxp::Pgxp::new(),
->>>>>>> main
             mem_control: [0; 9],
             ram_size: 0,
             cache_control: 0,
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            zram_system: zram::ZramSystem::new(4096, num_cpus::get()),
+            gpu_compressor: zram::GpuMemoryCompressor::new(),
+            compatibility_manager: compatibility::CompatibilityManager::new(),
+            ggpo_session: None,
+            power_management: Some(power_management::PowerManagement::new()),
+            framerate_controller: Some(framerate_controller::FramerateController::new()),
+            display_sync: Some(display_sync::DisplaySync::new()),
+            #[cfg(target_arch = "aarch64")]
+            arm_optimizer: {
+                let mut optimizer = arm_optimizer::ArmOptimizer::new();
+                optimizer.initialize();
+                optimizer
+            },
         })
     }
 
@@ -231,10 +289,30 @@ impl Psx {
         self.gpu.get_frame()
     }
 
+    /// Step the emulator by one CPU instruction or event
+    pub fn step(&mut self) {
+        if self.cpu_stalled_for_dma {
+            // Fast forward to the next event
+            self.cycle_counter = self.sync.first_event();
+        } else {
+            if !sync::is_event_pending(self) {
+                cpu::run_next_instruction(self);
+            }
+        }
+
+        if sync::is_event_pending(self) {
+            sync::handle_events(self);
+        }
+    }
+
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
+        use std::time::Instant;
+        let frame_start = Instant::now();
+        
         self.frame_done = false;
         while !self.frame_done {
+            self.step();
             // Process memory bus for this cycle
             let bus_cycles = self.memory_bus.tick(self.cycle_counter);
             self.tick(bus_cycles);
@@ -249,6 +327,26 @@ impl Psx {
             }
 
             sync::handle_events(self);
+        }
+
+        // Update frame timing stats
+        let frame_time = frame_start.elapsed();
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            if fc.should_present_frame() {
+                fc.frame_presented();
+            }
+        }
+        
+        // Update display sync
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.update(frame_time);
+        }
+        
+        // Update power management metrics
+        if let Some(pm) = self.power_management.as_mut() {
+            let fps = 1.0 / frame_time.as_secs_f32();
+            let frame_time_ms = frame_time.as_secs_f32() * 1000.0;
+            pm.update_metrics(fps, frame_time_ms);
         }
 
         // Update developer overlay if enabled
@@ -354,6 +452,156 @@ impl Psx {
     /// Update developer overlay metrics
     fn update_developer_overlay(&mut self, elapsed_cycles: CycleCount) {
         self.developer_overlay.update(self, elapsed_cycles);
+    }
+
+    /// Compress memory block using ZRAM
+    pub fn compress_memory_block(&self, block_id: usize, data: &[u8], data_type: zram::DataType) -> f32 {
+        self.zram_system.store_compressed(block_id, data, data_type)
+    }
+
+    /// Decompress memory block from ZRAM
+    pub fn decompress_memory_block(&self, block_id: usize) -> Option<Vec<u8>> {
+        self.zram_system.retrieve_decompressed(block_id)
+    }
+
+    /// Prefetch memory blocks for reduced latency
+    pub fn prefetch_memory_blocks(&self, block_ids: &[usize]) {
+        self.zram_system.prefetch(block_ids)
+    }
+
+    /// Get ZRAM compression statistics
+    pub fn get_zram_stats(&self) -> zram::CompressionStats {
+        self.zram_system.get_stats()
+    }
+
+    /// Get ZRAM memory usage (compressed_size, original_size)
+    pub fn get_zram_memory_usage(&self) -> (usize, usize) {
+        self.zram_system.get_memory_usage()
+    }
+
+    /// Compress GPU texture
+    pub fn compress_gpu_texture(&self, texture_id: u64, data: &[u8]) -> f32 {
+        self.gpu_compressor.compress_texture(texture_id, data)
+    }
+
+    /// Decompress GPU texture
+    pub fn decompress_gpu_texture(&self, texture_id: u64) -> Option<Vec<u8>> {
+        self.gpu_compressor.decompress_texture(texture_id)
+    }
+
+    /// Compress GPU framebuffer
+    pub fn compress_gpu_framebuffer(&self, fb_id: usize, data: &[u8]) -> f32 {
+        self.gpu_compressor.compress_framebuffer(fb_id, data)
+    }
+
+    /// Clear ZRAM compression cache
+    pub fn clear_zram_cache(&self) {
+        self.zram_system.clear()
+    }
+    
+    /// Update power management system
+    pub fn update_power_management(&mut self, has_input: bool, temperature: f32) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.update_idle(has_input);
+            pm.check_thermal(temperature);
+            
+            // Apply CPU frequency scaling
+            let cpu_freq_multiplier = pm.get_cpu_frequency_mhz() as f32 / 2400.0;
+            self.cpu.frequency_multiplier = cpu_freq_multiplier;
+            
+            // Apply GPU clock scaling
+            let gpu_clock_multiplier = pm.get_gpu_clock_mhz() as f32 / 800.0;
+            self.gpu.clock_multiplier = gpu_clock_multiplier;
+        }
+    }
+
+    /// Check if frame should be presented based on power management settings
+    pub fn should_present_frame_pm(&mut self) -> bool {
+        self.power_management.as_mut()
+            .map(|pm| pm.should_present_frame())
+            .unwrap_or(true)
+    }
+
+    /// Enable fast-forward mode with power boost
+    pub fn enable_fast_forward(&mut self) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.enable_fast_forward();
+        }
+    }
+
+    /// Disable fast-forward mode
+    pub fn disable_fast_forward(&mut self) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.disable_fast_forward();
+        }
+    }
+
+    /// Load a game-specific power profile
+    pub fn load_power_profile(&mut self, game_id: &str) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.load_game_profile(game_id);
+        }
+    }
+
+    /// Save current power settings as a game profile
+    pub fn save_power_profile(&mut self, game_id: String, name: String) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.save_game_profile(game_id, name);
+        }
+    }
+
+    /// Set framerate cap
+    pub fn set_framerate_cap(&mut self, cap: power_management::FramerateCap) {
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            fc.set_target_fps(match cap {
+                power_management::FramerateCap::Fps30 => 30.0,
+                power_management::FramerateCap::Fps40 => 40.0,
+                power_management::FramerateCap::Fps60 => 60.0,
+                power_management::FramerateCap::Uncapped => 120.0,
+                power_management::FramerateCap::Custom(fps) => fps as f32,
+            });
+        }
+    }
+
+    /// Set display refresh rate
+    pub fn set_refresh_rate(&mut self, rate: f32) {
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.set_refresh_rate(rate);
+        }
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            fc.set_refresh_rate(rate);
+        }
+    }
+
+    /// Enable/disable VRR
+    pub fn set_vrr_enabled(&mut self, enabled: bool) {
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.set_vrr_enabled(enabled);
+        }
+    }
+
+    /// Update battery information
+    pub fn update_battery(&mut self, charge_percent: f32, is_charging: bool, current_draw_ma: f32) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.update_battery(charge_percent, is_charging, current_draw_ma);
+        }
+    }
+
+    /// Get power management metrics
+    pub fn get_power_metrics(&self) -> Option<&power_management::PerformanceMetrics> {
+        self.power_management.as_ref().map(|pm| &pm.metrics)
+    }
+
+    /// Get battery information
+    pub fn get_battery_info(&self) -> Option<&power_management::BatteryInfo> {
+        self.power_management.as_ref().map(|pm| &pm.battery_info)
+    }
+
+    /// Apply OLED optimizations to a frame
+    pub fn apply_oled_optimizations(&self, frame: &mut [u8], width: usize, height: usize) {
+        if let Some(pm) = self.power_management.as_ref() {
+            pm.apply_oled_optimizations(frame, width, height);
+        }
     }
 
     /// Advance the CPU cycle counter by the given number of ticks
@@ -717,6 +965,176 @@ impl Psx {
 
     fn set_cpu_stalled_for_dma(&mut self, stalled: bool) {
         self.cpu_stalled_for_dma = stalled;
+    }
+
+    /// Initialize GGPO netplay session
+    pub fn init_netplay(&mut self, config: ggpo::NetplayConfig) -> Result<()> {
+        let session = ggpo::GgpoSession::new(config)?;
+        self.ggpo_session = Some(session);
+        Ok(())
+    }
+
+    /// Connect to netplay session
+    pub async fn connect_netplay(&mut self) -> Result<()> {
+        if let Some(ref mut session) = self.ggpo_session {
+            session.connect().await?;
+        }
+        Ok(())
+    }
+
+    /// Process netplay frame
+    pub fn process_netplay_frame(&mut self, local_input: u32) -> Result<()> {
+        if let Some(ref mut session) = self.ggpo_session {
+            let input_frame = ggpo::InputFrame {
+                frame: session.get_current_frame(),
+                player_id: 1,
+                buttons: local_input,
+                analog_left_x: 128,
+                analog_left_y: 128,
+                analog_right_x: 128,
+                analog_right_y: 128,
+                checksum: self.calculate_game_checksum(),
+            };
+
+            session.advance_frame(input_frame)?;
+
+            // Save current state for potential rollback
+            let state = self.create_save_state()?;
+            session.save_frame(state)?;
+        }
+        Ok(())
+    }
+
+    /// Create a save state for rollback
+    pub fn create_save_state(&self) -> Result<crate::save_state::SaveState> {
+        use crate::save_state::*;
+
+        let cpu_state = CpuState {
+            pc: self.cpu.pc(),
+            next_pc: self.cpu.next_pc(),
+            regs: self.cpu.regs(),
+            hi: self.cpu.hi(),
+            lo: self.cpu.lo(),
+            cop0_regs: self.cop0.regs(),
+            load_delay_slot: self.cpu.load_delay_slot(),
+            branch_delay: self.cpu.branch_delay(),
+            exception_pending: self.cpu.exception_pending(),
+        };
+
+        let gpu_state = GpuState {
+            vram: self.gpu.vram().to_vec(),
+            display_mode: self.gpu.display_mode(),
+            display_area: DisplayArea {
+                x: self.gpu.display_area_x(),
+                y: self.gpu.display_area_y(),
+                width: self.gpu.display_width(),
+                height: self.gpu.display_height(),
+            },
+            draw_area: DrawArea {
+                left: self.gpu.draw_area_left(),
+                top: self.gpu.draw_area_top(),
+                right: self.gpu.draw_area_right(),
+                bottom: self.gpu.draw_area_bottom(),
+            },
+            texture_window: TextureWindow {
+                mask_x: self.gpu.texture_window_mask_x(),
+                mask_y: self.gpu.texture_window_mask_y(),
+                offset_x: self.gpu.texture_window_offset_x(),
+                offset_y: self.gpu.texture_window_offset_y(),
+            },
+            draw_offset: self.gpu.draw_offset(),
+            mask_settings: self.gpu.mask_settings(),
+            status_register: self.gpu.status(),
+        };
+
+        let spu_state = SpuState {
+            voices: vec![],
+            control_register: self.spu.control_register(),
+            status_register: self.spu.status_register(),
+            reverb_settings: ReverbSettings::default(),
+            volume_left: self.spu.main_volume_left(),
+            volume_right: self.spu.main_volume_right(),
+            cd_volume_left: self.spu.cd_volume_left(),
+            cd_volume_right: self.spu.cd_volume_right(),
+            ram: self.spu.ram().to_vec(),
+        };
+
+        let memory_state = MemoryState {
+            main_ram: self.xmem.ram().to_vec(),
+            scratchpad: self.scratch_pad.data().to_vec(),
+            bios: self.xmem.bios().to_vec(),
+            memory_cards: [None, None],
+        };
+
+        let controller_state = ControllerState::default();
+
+        let timing_state = TimingState {
+            system_clock: self.cycle_counter as u64,
+            gpu_clock: 0,
+            spu_clock: 0,
+            timers: [TimerState::default(); 3],
+            frame_counter: 0,
+        };
+
+        let mut state = SaveState::new();
+        state.cpu_state = cpu_state;
+        state.gpu_state = gpu_state;
+        state.spu_state = spu_state;
+        state.memory_state = memory_state;
+        state.controller_state = controller_state;
+        state.timing_state = timing_state;
+
+        Ok(state)
+    }
+
+    /// Load a save state for rollback
+    pub fn load_save_state(&mut self, state: &crate::save_state::SaveState) -> Result<()> {
+        // Restore CPU state
+        self.cpu.set_pc(state.cpu_state.pc);
+        self.cpu.set_next_pc(state.cpu_state.next_pc);
+        self.cpu.set_regs(state.cpu_state.regs);
+        self.cpu.set_hi(state.cpu_state.hi);
+        self.cpu.set_lo(state.cpu_state.lo);
+        self.cop0.set_regs(state.cpu_state.cop0_regs);
+
+        // Restore memory
+        self.xmem.set_ram(&state.memory_state.main_ram);
+        self.scratch_pad.set_data(&state.memory_state.scratchpad);
+
+        // Restore timing
+        self.cycle_counter = state.timing_state.system_clock as CycleCount;
+
+        Ok(())
+    }
+
+    /// Calculate checksum for sync verification
+    fn calculate_game_checksum(&self) -> u32 {
+        use crc32fast::Hasher;
+        let mut hasher = Hasher::new();
+        
+        // Hash critical game state
+        hasher.update(&self.cpu.pc().to_le_bytes());
+        hasher.update(&self.cpu.regs()[0..8].iter().flat_map(|r| r.to_le_bytes()).collect::<Vec<_>>());
+        
+        hasher.finalize()
+    }
+
+    /// Disconnect netplay session
+    pub fn disconnect_netplay(&mut self) {
+        if let Some(ref mut session) = self.ggpo_session {
+            session.disconnect();
+        }
+        self.ggpo_session = None;
+    }
+
+    /// Check if netplay is active
+    pub fn is_netplay_active(&self) -> bool {
+        self.ggpo_session.is_some()
+    }
+
+    /// Get netplay statistics
+    pub fn get_netplay_stats(&self) -> Option<ggpo::network::NetworkStats> {
+        self.ggpo_session.as_ref().map(|s| s.get_network_stats())
     }
 }
 

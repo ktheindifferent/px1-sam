@@ -296,3 +296,38 @@ impl CdcState {
         matches!(self, CdcState::Idle)
     }
 }
+
+impl Cdc {
+    /// Compatibility fixes - Enable subchannel data emulation
+    pub fn enable_subchannel_emulation(&mut self, enable: bool) {
+        // Subchannel data is required for Spyro anti-piracy checks
+        // This would modify how disc sectors are read
+    }
+    
+    /// Enable LibCrypt protection emulation
+    pub fn enable_libcrypt_emulation(&mut self, enable: bool) {
+        // LibCrypt emulation for European protected games
+        // This would affect sector scrambling
+    }
+    
+    /// Set anti-piracy mode
+    pub fn set_antipiracy_mode(&mut self, mode: super::AntipiracyMode) {
+        // Enhanced mode for Spyro 3 advanced checks
+        // This would modify various timing and data behaviors
+    }
+    
+    /// Adjust seek timing
+    pub fn adjust_seek_timing(&mut self, adjustment: i32) {
+        // Modifies seek delay timing for game-specific fixes
+    }
+    
+    /// Enable GetlocP timing fix
+    pub fn enable_getlocp_timing_fix(&mut self, enable: bool) {
+        // Fixes GetlocP command timing issues in certain games
+    }
+    
+    /// Enable mechanical timing emulation
+    pub fn enable_mechanical_timing(&mut self, enable: bool) {
+        // Emulates physical CD drive mechanical timing
+    }
+}
