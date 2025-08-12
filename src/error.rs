@@ -52,5 +52,10 @@ pub enum PsxError {
     #[error("Encryption error: {0}")]
     EncryptionError(String),
     #[error("Authentication error for {provider}: {reason}")]
-    AuthenticationError { provider: String, reason: String }
+    AuthenticationError { provider: String, reason: String },
+    #[error("Security error in {module}: {reason}")]
+    SecurityError {
+        module: String,
+        reason: String,
+    },
 }
