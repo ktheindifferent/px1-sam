@@ -35,6 +35,9 @@ mod sync;
 mod timers;
 mod vram;
 mod xmem;
+pub mod run_ahead;
+pub mod fast_savestate;
+pub mod run_ahead_integration;
 pub mod power_management;
 pub mod framerate_controller;
 pub mod display_sync;
@@ -275,6 +278,22 @@ impl Psx {
         self.gpu.get_frame()
     }
 
+    /// Step the emulator by one CPU instruction or event
+    pub fn step(&mut self) {
+        if self.cpu_stalled_for_dma {
+            // Fast forward to the next event
+            self.cycle_counter = self.sync.first_event();
+        } else {
+            if !sync::is_event_pending(self) {
+                cpu::run_next_instruction(self);
+            }
+        }
+
+        if sync::is_event_pending(self) {
+            sync::handle_events(self);
+        }
+    }
+
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
         use std::time::Instant;
@@ -282,6 +301,7 @@ impl Psx {
         
         self.frame_done = false;
         while !self.frame_done {
+            self.step();
             // Process memory bus for this cycle
             let bus_cycles = self.memory_bus.tick(self.cycle_counter);
             self.tick(bus_cycles);
