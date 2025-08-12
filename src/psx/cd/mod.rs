@@ -93,6 +93,48 @@ impl CdInterface {
     }
 }
 
+/// Anti-piracy modes for CD emulation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AntipiracyMode {
+    Standard,
+    Enhanced,
+}
+
+impl CdInterface {
+    /// Compatibility fixes - Enable subchannel data emulation for Spyro
+    pub fn enable_subchannel_emulation(&mut self, enable: bool) {
+        // Subchannel data is needed for Spyro's anti-piracy checks
+        self.cdc.enable_subchannel_emulation(enable);
+    }
+    
+    /// Enable LibCrypt protection emulation
+    pub fn enable_libcrypt_emulation(&mut self, enable: bool) {
+        // LibCrypt is used by various European games
+        self.cdc.enable_libcrypt_emulation(enable);
+    }
+    
+    /// Set anti-piracy mode for enhanced protection handling
+    pub fn set_antipiracy_mode(&mut self, mode: AntipiracyMode) {
+        // Enhanced mode for Spyro 3's advanced checks
+        self.cdc.set_antipiracy_mode(mode);
+    }
+    
+    /// Adjust seek timing for game-specific fixes
+    pub fn adjust_seek_timing(&mut self, adjustment: i32) {
+        self.cdc.adjust_seek_timing(adjustment);
+    }
+    
+    /// Enable GetlocP timing fix
+    pub fn enable_getlocp_timing_fix(&mut self, enable: bool) {
+        self.cdc.enable_getlocp_timing_fix(enable);
+    }
+    
+    /// Enable mechanical timing emulation
+    pub fn enable_mechanical_timing(&mut self, enable: bool) {
+        self.cdc.enable_mechanical_timing(enable);
+    }
+}
+
 /// Called by the DMA when it wants to get our CD data
 pub fn dma_load(psx: &mut Psx) -> u32 {
     // We read 4 bytes at a time

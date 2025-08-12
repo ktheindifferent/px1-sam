@@ -58,6 +58,13 @@ pub struct Cpu {
     gte_command_end: CycleCount,
     /// Offset added to the index in the opcode jumptable when decoding instructions
     opcode_table_offset: u8,
+    /// Clock multiplier for compatibility fixes (1.0 = normal speed)
+    #[serde(default = "default_clock_multiplier")]
+    clock_multiplier: f32,
+}
+
+fn default_clock_multiplier() -> f32 {
+    1.0
 }
 
 impl Cpu {
@@ -86,7 +93,13 @@ impl Cpu {
             mult_div_end: 0,
             gte_command_end: 0,
             opcode_table_offset: 0,
+            clock_multiplier: 1.0,
         }
+    }
+    
+    /// Set CPU clock multiplier for timing fixes (Tekken 3)
+    pub fn set_clock_multiplier(&mut self, multiplier: f32) {
+        self.clock_multiplier = multiplier;
     }
 
     /// Returns the address of the instruction currently being executed

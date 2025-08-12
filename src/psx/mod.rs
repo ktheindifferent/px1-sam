@@ -2,6 +2,7 @@
 
 pub mod bios;
 pub mod cd;
+pub mod compatibility;
 pub mod cop0;
 pub mod cop0_enhanced;
 pub mod cpu;
@@ -109,6 +110,9 @@ pub struct Psx {
     /// Developer overlay system (not serialized)
     #[serde(skip)]
     developer_overlay: overlay::DeveloperOverlay,
+    /// Game compatibility manager (not serialized)
+    #[serde(skip)]
+    compatibility_manager: compatibility::CompatibilityManager,
     /// GGPO netplay session (not serialized)
     #[serde(skip)]
     ggpo_session: Option<ggpo::GgpoSession>,
@@ -134,8 +138,16 @@ impl Psx {
         cdc_firmware: [u8; cd::CDC_ROM_SIZE],
     ) -> Result<Psx> {
         let standard = disc.region().video_standard();
+        let serial = disc.serial_number();
 
-        Psx::new_with_bios(Some(disc), bios, standard, cdc_firmware)
+        let mut psx = Psx::new_with_bios(Some(disc), bios, standard, cdc_firmware)?;
+        
+        // Detect game and apply compatibility patches
+        psx.compatibility_manager.detect_game(serial);
+        let profile = psx.compatibility_manager.current_profile().clone();
+        psx.apply_game_patches(&profile);
+        
+        Ok(psx)
     }
 
     pub fn new_with_bios(
@@ -182,6 +194,7 @@ impl Psx {
             dma_timing_penalty: 0,
             cpu_stalled_for_dma: false,
             developer_overlay: overlay::DeveloperOverlay::new(),
+            compatibility_manager: compatibility::CompatibilityManager::new(),
             ggpo_session: None,
             power_management: Some(power_management::PowerManagement::new()),
             framerate_controller: Some(framerate_controller::FramerateController::new()),
