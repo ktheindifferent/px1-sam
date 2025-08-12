@@ -26,6 +26,7 @@ discord-rpc = ["discord-rich-presence", "tokio"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
+ml-input-prediction = ["candle-core", "candle-nn", "smartcore"]
 ai-frame-generation = ["ort", "ndarray", "half", "imageproc", "memmap2", "crossbeam"]
 cloud-gaming = ["webrtc", "tokio", "futures", "bytes", "rand", "stun_codec", "turn", "ice"]
 sunshine = ["streaming", "tokio", "async-trait", "rustls", "webpki"]
@@ -157,9 +158,17 @@ websocket = { version = "0.26", optional = true }
 v4l = { version = "0.14", optional = true }
 cpal = { version = "0.15", optional = true }
 
+# ML Input Prediction dependencies
+rand = "0.8"
+ndarray = "0.15"
+candle-core = { version = "0.3", optional = true }
+candle-nn = { version = "0.3", optional = true }
+nalgebra = "0.32"
+statrs = "0.16"
+smartcore = { version = "0.3", optional = true }
+
 # AI Frame Generation dependencies
 ort = { version = "2.0.0-rc.10", features = ["cuda", "tensorrt"], optional = true }
-ndarray = { version = "0.15", optional = true }
 half = { version = "2.3", features = ["serde"], optional = true }
 imageproc = { version = "0.23", optional = true }
 memmap2 = { version = "0.9", optional = true }
@@ -168,7 +177,6 @@ crossbeam = { version = "0.8", optional = true }
 # Cloud Gaming dependencies
 turn = { version = "0.6", optional = true }
 ice = { version = "0.10", optional = true }
-rand = { version = "0.8", optional = true }
 
 # Sunshine server dependencies
 rustls = { version = "0.21", optional = true }
@@ -179,7 +187,6 @@ rustfft = "6.1"
 num-complex = "0.4"
 hound = { version = "3.5", optional = true }
 rubato = "0.14"
-nalgebra = "0.32"
 
 [dev-dependencies]
 flexbuffers = "2.0"
