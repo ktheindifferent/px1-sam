@@ -26,6 +26,7 @@ discord-rpc = ["discord-rich-presence", "tokio"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 streaming = ["ffmpeg-next", "opus", "x264", "websocket", "v4l", "cpal"]
+sunshine = ["streaming", "tokio", "async-trait", "rustls", "webpki"]
 memory-forensics = ["mlua", "keystone"]
 mod-support = ["mlua", "notify", "semver"]
 
@@ -153,6 +154,10 @@ x264 = { version = "0.5", optional = true }
 websocket = { version = "0.26", optional = true }
 v4l = { version = "0.14", optional = true }
 cpal = { version = "0.15", optional = true }
+
+# Sunshine server dependencies
+rustls = { version = "0.21", optional = true }
+webpki = { version = "0.22", optional = true }
 
 # 3D Spatial Audio dependencies
 rustfft = "6.1"

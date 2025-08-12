@@ -45,6 +45,8 @@ pub mod framerate_controller;
 pub mod display_sync;
 pub mod retroachievements;
 pub mod security;
+#[cfg(feature = "sunshine")]
+pub mod sunshine;
 pub mod orchestration;
 #[cfg(feature = "memory-forensics")]
 pub mod memory_forensics;
