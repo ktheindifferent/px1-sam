@@ -148,6 +148,8 @@ pub struct Gpu {
     frame_pacer: FramePacer,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
+    /// Clock multiplier for dynamic GPU clock scaling
+    pub clock_multiplier: f32,
     /// Revolutionary CRT beam simulation renderer
     crt_beam_renderer: Option<CrtBeamRenderer>,
     /// CRT beam configuration
@@ -204,6 +206,7 @@ impl Gpu {
             rendering_pipeline: RenderingPipeline::new(),
             frame_pacer: FramePacer::new(),
             shader_manager: None,
+            clock_multiplier: 1.0,
             crt_beam_renderer: None,
             crt_beam_config: CrtBeamConfig::default(),
         };
