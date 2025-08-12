@@ -53,9 +53,13 @@ mod psx_memory_card_integration;
 mod rewind;
 mod rewind_integration;
 mod achievement;
+#[cfg(feature = "streaming")]
+pub mod streaming;
 
 #[cfg(feature = "game-library")]
 pub mod game_library;
+#[cfg(feature = "cloud-sync")]
+pub mod cloud_sync;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
@@ -165,6 +169,9 @@ struct Context {
     slow_motion: accessibility::settings::SlowMotionController,
     /// Font scaler
     font_scaler: accessibility::settings::FontScaler,
+    /// Streaming manager for content creation
+    #[cfg(feature = "streaming")]
+    streaming_manager: Option<streaming::StreamingManager>,
 }
 
 impl Context {
@@ -201,6 +208,8 @@ impl Context {
             screen_reader: accessibility::screen_reader::ScreenReader::new(),
             slow_motion: accessibility::settings::SlowMotionController::new(),
             font_scaler: accessibility::settings::FontScaler::new(),
+            #[cfg(feature = "streaming")]
+            streaming_manager: None,
         };
 
         libretro::Context::refresh_variables(&mut ctx);
@@ -561,6 +570,29 @@ impl Context {
         }
     }
 
+    #[cfg(feature = "streaming")]
+    fn start_streaming(&mut self, config: streaming::StreamConfig) -> Result<()> {
+        let mut manager = streaming::StreamingManager::new(config);
+        manager.start_streaming()?;
+        self.streaming_manager = Some(manager);
+        info!("Streaming started");
+        Ok(())
+    }
+
+    #[cfg(feature = "streaming")]
+    fn stop_streaming(&mut self) -> Result<()> {
+        if let Some(mut manager) = self.streaming_manager.take() {
+            manager.stop_streaming()?;
+            info!("Streaming stopped");
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "streaming")]
+    fn is_streaming(&self) -> bool {
+        self.streaming_manager.as_ref().map_or(false, |m| m.is_streaming())
+    }
+
     fn output_frame(&mut self) {
         let draw_cd_state = match self.cd_overlay {
             CdOverlay::Disabled => None,
@@ -700,6 +732,16 @@ impl Context {
             }
         }
         
+        // Process frame for streaming if enabled
+        #[cfg(feature = "streaming")]
+        {
+            if let Some(ref mut manager) = self.streaming_manager {
+                if manager.is_streaming() {
+                    let _ = manager.process_frame(&frame.pixels, frame.width, frame.height);
+                }
+            }
+        }
+        
         // Apply accessibility visual processing if enabled
         if self.accessibility_manager.is_active() {
             // Convert frame data to mutable slice for processing
@@ -803,6 +845,17 @@ impl libretro::Context for Context {
 
         // Send sound samples
         let samples = self.psx.get_audio_samples();
+        
+        // Process audio for streaming if enabled
+        #[cfg(feature = "streaming")]
+        {
+            if let Some(ref mut manager) = self.streaming_manager {
+                if manager.is_streaming() {
+                    // Assume 44100Hz stereo for PSX audio
+                    let _ = manager.process_audio(&samples, 44100, 2);
+                }
+            }
+        }
         
         // Adjust audio sample rate for slow motion if enabled
         let adjusted_samples = if self.slow_motion.get_time_multiplier() < 1.0 {
