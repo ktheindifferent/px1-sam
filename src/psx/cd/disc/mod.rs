@@ -1,5 +1,6 @@
 use super::iso9660;
 use super::chd;
+use super::libcrypt::{LibCrypt, SubchannelQ};
 use crate::error::{PsxError, Result};
 use crate::psx::gpu::VideoStandard;
 pub use cache::Cache as CdCache;
@@ -21,6 +22,14 @@ macro_rules! disc_log {
 mod cache;
 pub mod advanced_cache;
 pub mod advanced_cache_wasm;
+pub mod wasm_integration;
+
+#[cfg(test)]
+mod cache_tests;
+#[cfg(test)]
+mod statistics_validation;
+#[cfg(test)]
+mod regression_tests;
 
 /// PlayStation disc.
 ///
@@ -31,6 +40,8 @@ pub struct Disc {
     cache: CdCache,
     /// Disc serial number
     serial: SerialNumber,
+    /// LibCrypt protection handler
+    libcrypt: LibCrypt,
 }
 
 impl Disc {
@@ -39,16 +50,25 @@ impl Disc {
         let mut cache = CdCache::new(image);
 
         let serial = extract_serial_number(&mut cache)?;
+        let libcrypt = LibCrypt::new();
 
-        let disc = Disc { cache, serial };
+        let disc = Disc { cache, serial, libcrypt };
 
         Ok(disc)
     }
 
     /// Load a disc from a CHD file
     pub fn from_chd<P: AsRef<Path>>(path: P) -> Result<Disc> {
-        let image = chd::ChdImage::open(path)?;
-        Self::new(Box::new(image))
+        let path_ref = path.as_ref();
+        let image = chd::ChdImage::open(path_ref)?;
+        let mut disc = Self::new(Box::new(image))?;
+        
+        // Try to auto-load SBI file
+        if let Err(e) = disc.libcrypt.auto_load_sbi(path_ref) {
+            disc_log!("Failed to auto-load SBI file: {:?}", e);
+        }
+        
+        Ok(disc)
     }
 
     /// Load a disc with CHD format detection and fallback support
@@ -117,6 +137,7 @@ impl Disc {
         Disc {
             cache: CdCache::new_with_toc(Box::new(DummyImage), toc),
             serial,
+            libcrypt: LibCrypt::new(),
         }
     }
 
@@ -135,6 +156,32 @@ impl Disc {
 
     pub fn serial_number(&self) -> SerialNumber {
         self.serial
+    }
+
+    /// Get subchannel Q data for a specific sector
+    pub fn get_subchannel_q(&self, msf: [u8; 3]) -> SubchannelQ {
+        // Create default subchannel Q data
+        let mut default = SubchannelQ::new();
+        default.absolute_msf = msf;
+        default.crc = default.calculate_crc();
+        
+        // Get modified data from LibCrypt if available
+        self.libcrypt.get_subchannel_q(msf, default)
+    }
+
+    /// Check if the disc has LibCrypt protection
+    pub fn has_libcrypt(&self) -> bool {
+        self.libcrypt.protection_type() != super::libcrypt::ProtectionType::None
+    }
+
+    /// Load SBI file for LibCrypt protection
+    pub fn load_sbi<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        self.libcrypt.load_sbi(path)
+    }
+
+    /// Get LibCrypt protection type
+    pub fn libcrypt_type(&self) -> super::libcrypt::ProtectionType {
+        self.libcrypt.protection_type()
     }
 }
 

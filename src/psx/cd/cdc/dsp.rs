@@ -471,10 +471,40 @@ fn read_sector(cdc: &mut Cdc) {
         Err(e) => panic!("Can't read sector {}: {}", cdc.dsp.position, e),
     };
 
-    // XXX TODO
-    let subq_crc_ok = true;
-
+    // Get the base subchannel Q data
     let mut subq = sector.q().to_raw();
+    
+    // Apply LibCrypt protection if present
+    let msf = match cdc.dsp.position {
+        DiscPosition::LeadIn(msf) => msf,
+        DiscPosition::Program(msf) => msf,
+    };
+    
+    // Convert MSF to BCD format for LibCrypt
+    let msf_bcd = [
+        msf.minute().bcd(),
+        msf.second().bcd(),
+        msf.frame().bcd(),
+    ];
+    
+    // Get potentially modified subchannel Q data from LibCrypt
+    let libcrypt_subq = disc.get_subchannel_q(msf_bcd);
+    
+    // If this sector has LibCrypt protection, use the modified data
+    if disc.has_libcrypt() {
+        let libcrypt_bytes = libcrypt_subq.to_bytes();
+        // Copy the first 10 bytes (excluding the peak data bytes)
+        subq[0..10].copy_from_slice(&libcrypt_bytes[0..10]);
+    }
+    
+    // Calculate CRC status - LibCrypt sectors may have intentionally wrong CRCs
+    let subq_crc_ok = if disc.has_libcrypt() {
+        // For LibCrypt protected discs, trust the LibCrypt data
+        true
+    } else {
+        // For normal discs, verify CRC
+        true // XXX TODO: Implement proper CRC check
+    };
 
     // The last two bytes of the data read from the subq pin are *not* the checksum (the checksum
     // is apparently checked internally then discarded). Instead I'm not sure *what* they are,
@@ -482,11 +512,6 @@ fn read_sector(cdc: &mut Cdc) {
     // two alternating values: [0x9f, 0x7f] and [0xfc, 0xff]
     //
     // See mendafen's code: it does appear to me an audio peak value
-    let msf = match cdc.dsp.position {
-        DiscPosition::LeadIn(msf) => msf,
-        DiscPosition::Program(msf) => msf,
-    };
-
     if msf.sector_index() & 1 != 0 {
         subq[10] = 0x9f;
         subq[11] = 0x7f;

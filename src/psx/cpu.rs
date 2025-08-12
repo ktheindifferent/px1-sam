@@ -46,6 +46,8 @@ pub struct Cpu {
     delay_slot: bool,
     /// If true BREAK instructions trigged the debugger instead of generating an exception
     debug_on_break: bool,
+    /// Frequency multiplier for dynamic clock scaling
+    pub frequency_multiplier: f32,
     /// Date at which the last division or multiplication will be done. DIV(U) and MULT(U) can run
     /// concurrently with other "normal" MIPS instructions and only block if a mf(hi|lo) is
     /// executed before they're finished
@@ -56,6 +58,13 @@ pub struct Cpu {
     gte_command_end: CycleCount,
     /// Offset added to the index in the opcode jumptable when decoding instructions
     opcode_table_offset: u8,
+    /// Clock multiplier for compatibility fixes (1.0 = normal speed)
+    #[serde(default = "default_clock_multiplier")]
+    clock_multiplier: f32,
+}
+
+fn default_clock_multiplier() -> f32 {
+    1.0
 }
 
 impl Cpu {
@@ -80,10 +89,17 @@ impl Cpu {
             icache: [ICacheLine::new(); 0x100],
             delay_slot: false,
             debug_on_break: false,
+            frequency_multiplier: 1.0,
             mult_div_end: 0,
             gte_command_end: 0,
             opcode_table_offset: 0,
+            clock_multiplier: 1.0,
         }
+    }
+    
+    /// Set CPU clock multiplier for timing fixes (Tekken 3)
+    pub fn set_clock_multiplier(&mut self, multiplier: f32) {
+        self.clock_multiplier = multiplier;
     }
 
     /// Returns the address of the instruction currently being executed
