@@ -9,6 +9,7 @@ mod rendering_pipeline;
 mod enhanced_rasterizer;
 pub mod shader_cache;
 pub mod shader_manager;
+pub mod frame_interpolation;
 pub mod crt_beam_renderer;
 
 #[cfg(feature = "vulkan")]
@@ -38,6 +39,7 @@ use crate::frame_pacing::FramePacer;
 pub use crate::frame_pacing::{DisplayMode, DisplayCapabilities, FramePacingStats};
 use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
+use frame_interpolation::{FrameInterpolator, InterpolationConfig, InterpolationMode};
 use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
 
 // Re-export ColorDepth for use in rasterizer
