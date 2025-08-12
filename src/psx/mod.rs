@@ -45,6 +45,7 @@ pub mod framerate_controller;
 pub mod display_sync;
 pub mod retroachievements;
 pub mod security;
+pub mod orchestration;
 
 // ARM-specific optimizations
 #[cfg(target_arch = "aarch64")]
