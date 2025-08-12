@@ -115,6 +115,9 @@ spirv-reflect = { version = "0.2", optional = true }
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
 
+# Compression dependencies for ZRAM
+lz4_flex = "0.11"
+zstd = "0.13"
 # External profiler dependencies
 tracy-client = { version = "0.16", optional = true }
 optick = { version = "1.3.4", optional = true }
