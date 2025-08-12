@@ -28,6 +28,8 @@ mod memory_control;
 pub mod memory_map;
 #[cfg(feature = "pgxp")]
 pub mod pgxp;
+#[cfg(feature = "ml-input-prediction")]
+pub mod ml_input_prediction;
 pub mod overlay;
 pub mod pad_memcard;
 mod spu;
