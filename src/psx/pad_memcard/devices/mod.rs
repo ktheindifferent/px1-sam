@@ -12,9 +12,23 @@ pub mod rumble_effects;
 pub mod enhanced_mouse;
 pub mod enhanced_guncon;
 pub mod enhanced_multitap;
+pub mod jogcon;
+pub mod flightstick;
+pub mod link_cable;
+pub mod usb_adapter;
+pub mod controller_profiles;
+pub mod peripheral_factory;
 
 // Re-export common types
 pub use peripheral_trait::{Peripheral as PeripheralTrait, Response};
+pub use jogcon::JogCon;
+pub use flightstick::FlightStick;
+pub use link_cable::LinkCable;
+pub use usb_adapter::UsbAdapter;
+pub use controller_profiles::ProfileManager;
+pub use peripheral_factory::{PeripheralFactory, PeripheralType};
+pub use link_cable::NetworkAdapter;
+pub use usb_adapter::AdapterType;
 
 use super::DsrState;
 use gamepad::{Button, ButtonState};
