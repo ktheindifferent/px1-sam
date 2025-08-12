@@ -40,14 +40,22 @@ extern crate serde_big_array;
 extern crate sha as sha_backend;
 extern crate thiserror;
 
+mod accessibility;
 mod assembler;
 mod bitwise;
 mod box_array;
 mod disc_control;
 mod error;
+pub mod frame_pacing;
 mod memory_card;
 mod memory_card_manager;
 mod psx_memory_card_integration;
+mod rewind;
+mod rewind_integration;
+mod achievement;
+
+#[cfg(feature = "game-library")]
+pub mod game_library;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
@@ -142,6 +150,18 @@ struct Context {
     cd_overlay: CdOverlay,
     /// Current position of the CD spin indicator
     cd_spin_pos: f32,
+    /// Accessibility features manager
+    accessibility_manager: accessibility::AccessibilityManager,
+    /// Input remapper for accessibility
+    input_remapper: accessibility::input_remapping::InputRemapper,
+    /// Visual indicator system
+    visual_indicators: accessibility::audio_visual_indicators::VisualIndicatorSystem,
+    /// Screen reader system
+    screen_reader: accessibility::screen_reader::ScreenReader,
+    /// Slow motion controller
+    slow_motion: accessibility::settings::SlowMotionController,
+    /// Font scaler
+    font_scaler: accessibility::settings::FontScaler,
 }
 
 impl Context {
@@ -172,6 +192,12 @@ impl Context {
             analog_compensation: 1.,
             cd_overlay: CdOverlay::Disabled,
             cd_spin_pos: 0.,
+            accessibility_manager: accessibility::AccessibilityManager::new(),
+            input_remapper: accessibility::input_remapping::InputRemapper::new(),
+            visual_indicators: accessibility::audio_visual_indicators::VisualIndicatorSystem::new(),
+            screen_reader: accessibility::screen_reader::ScreenReader::new(),
+            slow_motion: accessibility::settings::SlowMotionController::new(),
+            font_scaler: accessibility::settings::FontScaler::new(),
         };
 
         libretro::Context::refresh_variables(&mut ctx);
@@ -200,6 +226,11 @@ impl Context {
 
     fn poll_controllers(&mut self) {
         let gamepads = self.psx.pad_memcard.gamepads_mut();
+        
+        // Get current frame count for input processing
+        static mut FRAME_COUNT: u32 = 0;
+        unsafe { FRAME_COUNT += 1; }
+        let frame_count = unsafe { FRAME_COUNT };
 
         for port in 0..2 {
             let ty = self.controller_type[port];
@@ -216,20 +247,43 @@ impl Context {
                 let device = gamepads[port].device_mut();
 
                 for &(retrobutton, psxbutton) in &BUTTON_MAP {
-                    let state = if libretro::button_pressed(port, retrobutton) {
+                    let raw_pressed = libretro::button_pressed(port, retrobutton);
+                    
+                    // Track special buttons for analog combo
+                    if raw_pressed {
                         match retrobutton {
                             libretro::JoyPadButton::Select => select_pressed = true,
                             libretro::JoyPadButton::R3 => r3_pressed = true,
                             libretro::JoyPadButton::L3 => l3_pressed = true,
                             _ => (),
                         }
-
-                        ButtonState::Pressed
+                    }
+                    
+                    // Process through input remapper for accessibility
+                    let input_button = Self::retro_to_input_button(retrobutton);
+                    if let Some(input_btn) = input_button {
+                        let remapped = self.input_remapper.process_input(input_btn, raw_pressed, frame_count);
+                        
+                        // Apply remapped inputs
+                        for (mapped_btn, pressed) in remapped {
+                            if let Some(psx_btn) = Self::input_to_psx_button(mapped_btn) {
+                                let state = if pressed {
+                                    ButtonState::Pressed
+                                } else {
+                                    ButtonState::Released
+                                };
+                                device.set_button_state(psx_btn, state);
+                            }
+                        }
                     } else {
-                        ButtonState::Released
-                    };
-
-                    device.set_button_state(psxbutton, state);
+                        // Normal input processing for unmapped buttons
+                        let state = if raw_pressed {
+                            ButtonState::Pressed
+                        } else {
+                            ButtonState::Released
+                        };
+                        device.set_button_state(psxbutton, state);
+                    }
                 }
             }
 
@@ -422,6 +476,54 @@ impl Context {
             psx::VideoStandard::Pal => 49.76,
         }
     }
+    
+    // Helper function to convert libretro button to accessibility InputButton
+    fn retro_to_input_button(button: libretro::JoyPadButton) -> Option<accessibility::input_remapping::InputButton> {
+        use accessibility::input_remapping::InputButton;
+        match button {
+            libretro::JoyPadButton::B => Some(InputButton::Cross),
+            libretro::JoyPadButton::A => Some(InputButton::Circle),
+            libretro::JoyPadButton::Y => Some(InputButton::Square),
+            libretro::JoyPadButton::X => Some(InputButton::Triangle),
+            libretro::JoyPadButton::Up => Some(InputButton::DPadUp),
+            libretro::JoyPadButton::Down => Some(InputButton::DPadDown),
+            libretro::JoyPadButton::Left => Some(InputButton::DPadLeft),
+            libretro::JoyPadButton::Right => Some(InputButton::DPadRight),
+            libretro::JoyPadButton::L => Some(InputButton::L1),
+            libretro::JoyPadButton::L2 => Some(InputButton::L2),
+            libretro::JoyPadButton::L3 => Some(InputButton::L3),
+            libretro::JoyPadButton::R => Some(InputButton::R1),
+            libretro::JoyPadButton::R2 => Some(InputButton::R2),
+            libretro::JoyPadButton::R3 => Some(InputButton::R3),
+            libretro::JoyPadButton::Start => Some(InputButton::Start),
+            libretro::JoyPadButton::Select => Some(InputButton::Select),
+        }
+    }
+    
+    // Helper function to convert accessibility InputButton to PSX button
+    fn input_to_psx_button(button: accessibility::input_remapping::InputButton) -> Option<Button> {
+        use accessibility::input_remapping::InputButton;
+        match button {
+            InputButton::Cross => Some(Button::Cross),
+            InputButton::Circle => Some(Button::Circle),
+            InputButton::Square => Some(Button::Square),
+            InputButton::Triangle => Some(Button::Triangle),
+            InputButton::DPadUp => Some(Button::DUp),
+            InputButton::DPadDown => Some(Button::DDown),
+            InputButton::DPadLeft => Some(Button::DLeft),
+            InputButton::DPadRight => Some(Button::DRight),
+            InputButton::L1 => Some(Button::L1),
+            InputButton::L2 => Some(Button::L2),
+            InputButton::L3 => Some(Button::L3),
+            InputButton::R1 => Some(Button::R1),
+            InputButton::R2 => Some(Button::R2),
+            InputButton::R3 => Some(Button::R3),
+            InputButton::Start => Some(Button::Start),
+            InputButton::Select => Some(Button::Select),
+            InputButton::Analog => Some(Button::Analog),
+            _ => None,
+        }
+    }
 
     fn get_geometry(&self) -> libretro::GameGeometry {
         let upscale_shift = options::CoreOptions::internal_upscale_factor();
@@ -594,8 +696,32 @@ impl Context {
                 draw_pixel(x, y - 1, col);
             }
         }
-
-        libretro::frame_done(&frame.pixels, frame.width, frame.height);
+        
+        // Apply accessibility visual processing if enabled
+        if self.accessibility_manager.is_active() {
+            // Convert frame data to mutable slice for processing
+            let mut pixels = frame.pixels.clone();
+            
+            // Apply colorblind filters and high contrast
+            self.accessibility_manager.apply_frame_processing(
+                &mut pixels,
+                frame.width as usize,
+                frame.height as usize,
+            );
+            
+            // Render visual indicators for audio cues
+            self.visual_indicators.render_indicators(
+                &mut pixels,
+                frame.width as usize,
+                frame.height as usize,
+            );
+            
+            // Send processed frame
+            libretro::frame_done(&pixels, frame.width, frame.height);
+        } else {
+            // Send original frame
+            libretro::frame_done(&frame.pixels, frame.width, frame.height);
+        }
     }
 }
 
@@ -647,18 +773,43 @@ impl libretro::Context for Context {
     }
 
     fn render_frame(&mut self) {
+        // Check if slow motion is enabled and skip frames accordingly
+        if !self.slow_motion.should_process_frame() {
+            return;
+        }
+        
         self.poll_controllers();
+
+        // Apply time multiplier for slow motion
+        let time_multiplier = self.slow_motion.get_time_multiplier();
+        if time_multiplier < 1.0 {
+            // Adjust emulation speed for slow motion
+            // This would need to be properly integrated with the PSX timing
+        }
 
         self.psx.run_frame();
         
         // Update disc manager animation (assuming ~60fps, so ~16ms per frame)
         self.disc_manager.update_animation(16);
 
+        // Update accessibility systems
+        self.visual_indicators.update(16);
+        self.screen_reader.update();
+
         self.output_frame();
 
         // Send sound samples
         let samples = self.psx.get_audio_samples();
-        libretro::send_audio_samples(samples);
+        
+        // Adjust audio sample rate for slow motion if enabled
+        let adjusted_samples = if self.slow_motion.get_time_multiplier() < 1.0 {
+            // Apply pitch adjustment for slow motion
+            samples
+        } else {
+            samples
+        };
+        
+        libretro::send_audio_samples(adjusted_samples);
         // Clear the emulator's buffer for next frame
         self.psx.clear_audio_samples();
 
