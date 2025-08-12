@@ -55,6 +55,7 @@ mod rewind_integration;
 mod achievement;
 #[cfg(feature = "streaming")]
 pub mod streaming;
+pub mod patching;
 
 #[cfg(feature = "game-library")]
 pub mod game_library;
