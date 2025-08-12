@@ -49,6 +49,9 @@ pub mod frame_pacing;
 mod memory_card;
 mod memory_card_manager;
 mod psx_memory_card_integration;
+mod rewind;
+mod rewind_integration;
+mod achievement;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
