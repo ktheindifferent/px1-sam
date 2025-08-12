@@ -25,4 +25,8 @@ mod integration_tests;
 mod wasm_minimal_tests;
 
 #[cfg(test)]
+#[cfg(feature = "discord-rpc")]
+mod discord_rpc_tests;
+
+#[cfg(test)]
 mod rewind_tests;

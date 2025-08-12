@@ -13,6 +13,7 @@ pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
+discord-rpc = ["discord-rich-presence", "tokio", "serde_json"]
 game-library = ["rusqlite", "chrono", "uuid", "regex"]
 game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 compatibility-db = ["rusqlite", "chrono", "uuid"]
@@ -68,6 +69,9 @@ spirv-reflect = { version = "0.2", optional = true }
 
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
+
+# Discord Rich Presence dependencies
+discord-rich-presence = { version = "0.2", optional = true }
 
 [dev-dependencies]
 flexbuffers = "2.0"
