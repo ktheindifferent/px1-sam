@@ -34,6 +34,8 @@ pub use rasterizer::{Frame, Pixel, RasterizerOption};
 pub use rendering_pipeline::{RenderingMode, RenderingPipeline};
 use error_handler::{GpuCommandError, ErrorRecoveryAction, report_gpu_error, check_vram_bounds, check_clut_bounds};
 use debug_overlay::{DebugOverlay, DebugOverlayConfig};
+use crate::frame_pacing::FramePacer;
+pub use crate::frame_pacing::{DisplayMode, DisplayCapabilities, FramePacingStats};
 use texture_replacement::{TextureReplacementSystem, TextureReplacementConfig};
 use shader_manager::{ShaderManager, DrawState, ShaderHandle};
 use crt_beam_renderer::{CrtBeamRenderer, CrtBeamConfig};
@@ -140,6 +142,8 @@ pub struct Gpu {
     current_game_id: String,
     /// Hardware-accurate rendering pipeline
     rendering_pipeline: RenderingPipeline,
+    /// Frame pacing and VRR controller
+    frame_pacer: FramePacer,
     /// Shader pre-compilation and cache manager
     shader_manager: Option<ShaderManager>,
     /// Revolutionary CRT beam simulation renderer
@@ -196,11 +200,16 @@ impl Gpu {
             texture_replacement: None,
             current_game_id: String::new(),
             rendering_pipeline: RenderingPipeline::new(),
+            frame_pacer: FramePacer::new(),
             shader_manager: None,
             crt_beam_renderer: None,
             crt_beam_config: CrtBeamConfig::default(),
         };
 
+        // Detect display capabilities and set up frame pacing
+        gpu.frame_pacer.detect_display_capabilities();
+        gpu.frame_pacer.set_pal_mode(video_standard == VideoStandard::Pal);
+        
         gpu.refresh_lines_per_field();
         
         log::info!("GPU: Initialization complete. Lines per field: {}", gpu.lines_per_field);
@@ -354,6 +363,46 @@ impl Gpu {
     /// Enable/disable color banding reproduction
     pub fn set_color_banding(&mut self, enabled: bool) {
         self.rendering_pipeline.set_color_banding(enabled);
+    }
+    
+    /// Set frame pacing display mode
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        self.frame_pacer.set_mode(mode);
+    }
+    
+    /// Enable/disable black frame insertion
+    pub fn set_black_frame_insertion(&mut self, enabled: bool) {
+        self.frame_pacer.enable_black_frame_insertion(enabled);
+    }
+    
+    /// Enable/disable motion interpolation for 120Hz+ displays
+    pub fn set_motion_interpolation(&mut self, enabled: bool) {
+        self.frame_pacer.enable_motion_interpolation(enabled);
+    }
+    
+    /// Set beam racing offset for CRT-like latency
+    pub fn set_beam_racing_offset(&mut self, offset: u32) {
+        self.frame_pacer.set_beam_racing_offset(offset);
+    }
+    
+    /// Get frame pacing statistics
+    pub fn get_frame_pacing_stats(&self) -> FramePacingStats {
+        self.frame_pacer.get_stats()
+    }
+    
+    /// Get display capabilities
+    pub fn get_display_capabilities(&mut self) -> DisplayCapabilities {
+        self.frame_pacer.detect_display_capabilities()
+    }
+    
+    /// Get current speed adjustment for host sync
+    pub fn get_speed_adjustment(&self) -> f64 {
+        self.frame_pacer.get_speed_adjustment()
+    }
+    
+    /// Get audio resample ratio for sync
+    pub fn get_audio_resample_ratio(&self) -> f64 {
+        self.frame_pacer.get_audio_resample_ratio()
     }
 
     /// Initialize CRT beam simulation renderer
