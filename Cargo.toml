@@ -69,6 +69,25 @@ spirv-reflect = { version = "0.2", optional = true }
 # OpenGL dependencies
 gl = { version = "0.14", optional = true }
 
+# Dear ImGui dependencies
+imgui = "0.11"
+imgui-wgpu = "0.24"
+imgui-winit-support = "0.11"
+imgui-sys = "0.11"
+glium = { version = "0.32", optional = true }
+imgui-glium-renderer = { version = "0.11", optional = true }
+winit = "0.28"
+wgpu = "0.17"
+pollster = "0.3"
+
+# Additional UI dependencies
+strum = { version = "0.25", features = ["derive"] }
+strum_macros = "0.25"
+rfd = "0.12"  # Native file dialogs
+egui = { version = "0.24", optional = true }
+egui-wgpu = { version = "0.24", optional = true }
+egui-winit = { version = "0.24", optional = true }
+
 [dev-dependencies]
 flexbuffers = "2.0"
 tempfile = "3.8"
