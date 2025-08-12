@@ -3,20 +3,34 @@
 use crate::cd_stub as cdimage;
 use std::fmt;
 
-// Re-export modules that we'll use
+// Import PSX modules from the actual path
+#[path = "psx/cpu.rs"]
 pub mod cpu;
+#[path = "psx/cop0.rs"]
 pub mod cop0;
+#[path = "psx/gpu/mod.rs"]
 pub mod gpu;
+#[path = "psx/gte/mod.rs"]
 pub mod gte;
+#[path = "psx/spu/mod.rs"]
 pub mod spu;
+#[path = "psx/dma.rs"]
 pub mod dma;
+#[path = "psx/timers.rs"]
 pub mod timers;
+#[path = "psx/irq.rs"]
 pub mod irq;
+#[path = "psx/pad_memcard/mod.rs"]
 pub mod pad_memcard;
+#[path = "psx/memory_control.rs"]
 pub mod memory_control;
+#[path = "psx/cache.rs"]
 pub mod cache;
+#[path = "psx/bios/mod.rs"]
 pub mod bios;
+#[path = "psx/xmem.rs"]
 pub mod xmem;
+#[path = "psx/sync.rs"]
 pub mod sync;
 
 // Stub CD modules

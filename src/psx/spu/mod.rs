@@ -4,6 +4,7 @@
 
 mod fifo;
 mod fir;
+pub mod interpolation;
 mod reverb_resampler;
 
 use super::{cd, cpu, irq, sync, AccessWidth, Addressable, CycleCount, Psx};
@@ -435,6 +436,9 @@ pub struct Spu {
     /// Debug overlay data for SPU state visualization
     #[serde(skip)]
     debug_overlay: Option<SpuDebugOverlay>,
+    /// Advanced interpolation engine
+    #[serde(default)]
+    interpolation_engine: interpolation::InterpolationEngine,
 }
 
 impl Spu {
@@ -499,6 +503,7 @@ impl Spu {
             reverb_enable_override: false,  // Enable reverb by default for better audio
             reverb_enhanced_mode: true,
             debug_overlay: None,
+            interpolation_engine: interpolation::InterpolationEngine::new(),
         }
     }
 
@@ -518,6 +523,36 @@ impl Spu {
         } else {
             self.debug_overlay = None;
         }
+    }
+
+    /// Set interpolation method
+    pub fn set_interpolation_method(&mut self, method: interpolation::InterpolationMethod) {
+        self.interpolation_engine.set_method(method);
+    }
+
+    /// Get current interpolation method
+    pub fn get_interpolation_method(&self) -> interpolation::InterpolationMethod {
+        self.interpolation_engine.get_method()
+    }
+
+    /// Set game ID for automatic profile selection
+    pub fn set_game_id(&mut self, game_id: String) {
+        self.interpolation_engine.set_game_id(game_id);
+    }
+
+    /// Set interpolation configuration
+    pub fn set_interpolation_config(&mut self, config: interpolation::InterpolationConfig) {
+        self.interpolation_engine.set_config(config);
+    }
+
+    /// Get interpolation configuration
+    pub fn get_interpolation_config(&self) -> &interpolation::InterpolationConfig {
+        self.interpolation_engine.get_config()
+    }
+
+    /// Add custom game profile
+    pub fn add_game_profile(&mut self, profile: interpolation::GameProfile) {
+        self.interpolation_engine.add_game_profile(profile);
     }
 
     /// Get current debug overlay data if enabled
@@ -1254,7 +1289,9 @@ fn run_voice_cycle(psx: &mut Psx, voice: u8, sweep_factor: &mut i32) -> (i32, i3
     let raw_sample = if psx.spu.is_noise(voice) {
         (psx.spu.noise_lfsr as i16) as i32
     } else {
-        psx.spu[voice].next_raw_sample()
+        let interp_method = psx.spu.interpolation_engine.get_method();
+        let use_8bit = psx.spu.interpolation_engine.get_config().gaussian_8bit_accuracy;
+        psx.spu[voice].next_raw_sample(interp_method, use_8bit)
     };
 
     let sample = psx.spu[voice].apply_enveloppe(raw_sample);
@@ -1874,7 +1911,7 @@ impl Voice {
 
     /// Returns the next "raw" decoded sample for this voice, meaning the post-ADPCM decode and
     /// resampling but pre-ADSR.
-    fn next_raw_sample(&self) -> i32 {
+    fn next_raw_sample(&self, interpolation_method: interpolation::InterpolationMethod, use_8bit_accuracy: bool) -> i32 {
         let phase = (self.phase >> 4) as u8;
         let samples = [
             self.decoder_fifo[0],
@@ -1883,7 +1920,15 @@ impl Voice {
             self.decoder_fifo[3],
         ];
 
-        fir::filter(phase, samples)
+        // Use the advanced interpolation system
+        interpolation::interpolate(
+            interpolation_method,
+            phase,
+            samples,
+            None,  // No extended samples for sinc in this context
+            None,  // No sinc coeffs in this context
+            use_8bit_accuracy,
+        )
     }
 
     /// Run one cycle for the ADSR envelope function
