@@ -58,6 +58,8 @@ pub mod streaming;
 
 #[cfg(feature = "game-library")]
 pub mod game_library;
+#[cfg(feature = "cloud-sync")]
+pub mod cloud_sync;
 #[macro_use]
 pub mod libretro;
 #[cfg(feature = "debugger")]
