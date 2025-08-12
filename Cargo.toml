@@ -8,12 +8,13 @@ crate-type = ["cdylib"]
 path = "src/wasm_unified.rs"
 
 [features]
-default = ["game-library"]
+default = []
 pgxp = []
 debugger = []
 vulkan = ["ash", "shaderc", "spirv-reflect"]
 opengl = ["gl"]
-game-library = []
+game-library = ["rusqlite", "chrono", "uuid", "regex"]
+game-library-online = ["game-library", "reqwest", "tokio", "async-trait"]
 compatibility-db = []
 online-sync = ["compatibility-db"]
 
@@ -28,13 +29,13 @@ wasm-logger = "0.2"
 bitflags = "2.4"
 arrayvec = "0.7"
 lazy_static = "1.4"
-rusqlite = { version = "0.30", features = ["bundled", "serde_json"] }
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.6", features = ["v4", "serde"] }
-reqwest = { version = "0.11", features = ["json"] }
-tokio = { version = "1", features = ["rt", "macros"] }
-regex = "1.10"
-async-trait = "0.1"
+rusqlite = { version = "0.30", features = ["bundled", "serde_json"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+reqwest = { version = "0.11", features = ["json"], optional = true }
+tokio = { version = "1", features = ["rt", "macros"], optional = true }
+regex = { version = "1.10", optional = true }
+async-trait = { version = "0.1", optional = true }
 
 # Shader compilation dependencies
 crossbeam-channel = "0.5"
@@ -72,12 +73,6 @@ features = [
   "Gamepad",
   "GamepadButton",
 ]
-
-[features]
-default = ["game-library"]
-game-library = []
-compatibility-db = []
-online-sync = ["compatibility-db"]
 
 [profile.release]
 opt-level = "s"
