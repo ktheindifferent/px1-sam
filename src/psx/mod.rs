@@ -21,6 +21,7 @@ mod gte;
 mod irq;
 mod link_cable;
 mod mdec;
+mod memory_bus;
 mod memory_control;
 pub mod memory_map;
 #[cfg(feature = "pgxp")]
@@ -30,9 +31,18 @@ pub mod pad_memcard;
 mod spu;
 mod sync;
 mod timers;
+mod vram;
 mod xmem;
 pub mod zram;
 pub mod zram_config;
+pub mod power_management;
+pub mod framerate_controller;
+pub mod display_sync;
+pub mod retroachievements;
+
+// ARM-specific optimizations
+#[cfg(target_arch = "aarch64")]
+pub mod arm_optimizer;
 
 use crate::error::{PsxError, Result};
 pub use cd::{disc, iso9660, CDC_ROM_SHA256, CDC_ROM_SIZE};
@@ -77,6 +87,12 @@ pub struct Psx {
     cache_system: cache::CacheSystem,
     /// Enhanced memory control
     memory_ctrl: memory_control::MemoryControl,
+    /// Unified Memory Bus controller
+    memory_bus: memory_bus::MemoryBus,
+    /// Unified VRAM controller
+    vram: vram::Vram,
+    /// Cache coherency manager
+    cache_coherency: memory_bus::CacheCoherency,
     /// PGXP precision enhancement system
     #[cfg(feature = "pgxp")]
     #[serde(skip)]
@@ -101,6 +117,19 @@ pub struct Psx {
     /// GPU memory compressor (not serialized)
     #[serde(skip)]
     gpu_compressor: zram::GpuMemoryCompressor,
+    /// Dynamic power management system
+    #[serde(skip)]
+    pub power_management: Option<power_management::PowerManagement>,
+    /// Framerate controller
+    #[serde(skip)]
+    pub framerate_controller: Option<framerate_controller::FramerateController>,
+    /// Display synchronization
+    #[serde(skip)]
+    pub display_sync: Option<display_sync::DisplaySync>,
+    /// ARM optimization system (not serialized)
+    #[cfg(target_arch = "aarch64")]
+    #[serde(skip)]
+    arm_optimizer: arm_optimizer::ArmOptimizer,
 }
 
 impl Psx {
@@ -147,6 +176,9 @@ impl Psx {
             link_cable: link_cable::LinkCable::new(),
             cache_system: cache::CacheSystem::new(),
             memory_ctrl: memory_control::MemoryControl::new(),
+            memory_bus: memory_bus::MemoryBus::new(),
+            vram: vram::Vram::new(),
+            cache_coherency: memory_bus::CacheCoherency::new(),
             #[cfg(feature = "pgxp")]
             pgxp: pgxp::Pgxp::new(),
             mem_control: [0; 9],
@@ -157,6 +189,15 @@ impl Psx {
             developer_overlay: overlay::DeveloperOverlay::new(),
             zram_system: zram::ZramSystem::new(4096, num_cpus::get()),
             gpu_compressor: zram::GpuMemoryCompressor::new(),
+            power_management: Some(power_management::PowerManagement::new()),
+            framerate_controller: Some(framerate_controller::FramerateController::new()),
+            display_sync: Some(display_sync::DisplaySync::new()),
+            #[cfg(target_arch = "aarch64")]
+            arm_optimizer: {
+                let mut optimizer = arm_optimizer::ArmOptimizer::new();
+                optimizer.initialize();
+                optimizer
+            },
         })
     }
 
@@ -229,8 +270,15 @@ impl Psx {
 
     /// Run the emulator for a single frame
     pub fn run_frame(&mut self) {
+        use std::time::Instant;
+        let frame_start = Instant::now();
+        
         self.frame_done = false;
         while !self.frame_done {
+            // Process memory bus for this cycle
+            let bus_cycles = self.memory_bus.tick(self.cycle_counter);
+            self.tick(bus_cycles);
+
             if self.cpu_stalled_for_dma {
                 // Fast forward to the next event
                 self.cycle_counter = self.sync.first_event();
@@ -241,6 +289,26 @@ impl Psx {
             }
 
             sync::handle_events(self);
+        }
+
+        // Update frame timing stats
+        let frame_time = frame_start.elapsed();
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            if fc.should_present_frame() {
+                fc.frame_presented();
+            }
+        }
+        
+        // Update display sync
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.update(frame_time);
+        }
+        
+        // Update power management metrics
+        if let Some(pm) = self.power_management.as_mut() {
+            let fps = 1.0 / frame_time.as_secs_f32();
+            let frame_time_ms = frame_time.as_secs_f32() * 1000.0;
+            pm.update_metrics(fps, frame_time_ms);
         }
 
         // Update developer overlay if enabled
@@ -391,6 +459,109 @@ impl Psx {
     /// Clear ZRAM compression cache
     pub fn clear_zram_cache(&self) {
         self.zram_system.clear()
+    /// Update power management system
+    pub fn update_power_management(&mut self, has_input: bool, temperature: f32) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.update_idle(has_input);
+            pm.check_thermal(temperature);
+            
+            // Apply CPU frequency scaling
+            let cpu_freq_multiplier = pm.get_cpu_frequency_mhz() as f32 / 2400.0;
+            self.cpu.frequency_multiplier = cpu_freq_multiplier;
+            
+            // Apply GPU clock scaling
+            let gpu_clock_multiplier = pm.get_gpu_clock_mhz() as f32 / 800.0;
+            self.gpu.clock_multiplier = gpu_clock_multiplier;
+        }
+    }
+
+    /// Check if frame should be presented based on power management settings
+    pub fn should_present_frame_pm(&mut self) -> bool {
+        self.power_management.as_mut()
+            .map(|pm| pm.should_present_frame())
+            .unwrap_or(true)
+    }
+
+    /// Enable fast-forward mode with power boost
+    pub fn enable_fast_forward(&mut self) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.enable_fast_forward();
+        }
+    }
+
+    /// Disable fast-forward mode
+    pub fn disable_fast_forward(&mut self) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.disable_fast_forward();
+        }
+    }
+
+    /// Load a game-specific power profile
+    pub fn load_power_profile(&mut self, game_id: &str) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.load_game_profile(game_id);
+        }
+    }
+
+    /// Save current power settings as a game profile
+    pub fn save_power_profile(&mut self, game_id: String, name: String) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.save_game_profile(game_id, name);
+        }
+    }
+
+    /// Set framerate cap
+    pub fn set_framerate_cap(&mut self, cap: power_management::FramerateCap) {
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            fc.set_target_fps(match cap {
+                power_management::FramerateCap::Fps30 => 30.0,
+                power_management::FramerateCap::Fps40 => 40.0,
+                power_management::FramerateCap::Fps60 => 60.0,
+                power_management::FramerateCap::Uncapped => 120.0,
+                power_management::FramerateCap::Custom(fps) => fps as f32,
+            });
+        }
+    }
+
+    /// Set display refresh rate
+    pub fn set_refresh_rate(&mut self, rate: f32) {
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.set_refresh_rate(rate);
+        }
+        if let Some(fc) = self.framerate_controller.as_mut() {
+            fc.set_refresh_rate(rate);
+        }
+    }
+
+    /// Enable/disable VRR
+    pub fn set_vrr_enabled(&mut self, enabled: bool) {
+        if let Some(ds) = self.display_sync.as_mut() {
+            ds.set_vrr_enabled(enabled);
+        }
+    }
+
+    /// Update battery information
+    pub fn update_battery(&mut self, charge_percent: f32, is_charging: bool, current_draw_ma: f32) {
+        if let Some(pm) = self.power_management.as_mut() {
+            pm.update_battery(charge_percent, is_charging, current_draw_ma);
+        }
+    }
+
+    /// Get power management metrics
+    pub fn get_power_metrics(&self) -> Option<&power_management::PerformanceMetrics> {
+        self.power_management.as_ref().map(|pm| &pm.metrics)
+    }
+
+    /// Get battery information
+    pub fn get_battery_info(&self) -> Option<&power_management::BatteryInfo> {
+        self.power_management.as_ref().map(|pm| &pm.battery_info)
+    }
+
+    /// Apply OLED optimizations to a frame
+    pub fn apply_oled_optimizations(&self, frame: &mut [u8], width: usize, height: usize) {
+        if let Some(pm) = self.power_management.as_ref() {
+            pm.apply_oled_optimizations(frame, width, height);
+        }
     }
 
     /// Advance the CPU cycle counter by the given number of ticks
@@ -425,24 +596,38 @@ impl Psx {
     fn load<T: Addressable>(&mut self, address: u32) -> T {
         let abs_addr = map::mask_region(address);
 
+        // Apply memory mirroring
+        let physical_addr = self.memory_bus.apply_mirroring(abs_addr);
+
+        // Submit memory request to unified bus
+        self.memory_bus.request_access(
+            memory_bus::BusComponent::Cpu,
+            physical_addr,
+            memory_bus::AccessType::Read,
+            T::width(),
+            memory_bus::BusPriority::CpuData,
+            self.cycle_counter,
+            None,
+        );
+
+        // Get access latency from memory bus
+        let latency = self.memory_bus.get_access_latency(
+            physical_addr,
+            T::width(),
+            memory_bus::BusComponent::Cpu,
+        );
+
         // XXX Shouldn't we set dma_timing_penalty to 0 once we've "ticked" it? Mednafen doesn't do
         // it but I don't understand why not. Maybe it's just that the DMA is updated often enough
         // that it doesn't matter because the timing penalty is updated constantly?
-        self.tick(self.dma_timing_penalty);
+        self.tick(self.dma_timing_penalty + latency);
 
         if let Some(offset) = map::RAM.contains(abs_addr) {
-            // During DMA, CPU can still access RAM but with increased latency
-            let access_penalty = if self.cpu_stalled_for_dma {
-                // CPU is stalled, this shouldn't happen
-                0
-            } else if self.dma_timing_penalty > 0 {
-                // DMA is active, RAM access is slower
-                5
-            } else {
-                // Normal RAM access
-                3
-            };
-            self.tick(access_penalty);
+            // Check cache coherency
+            if self.cache_coherency.needs_invalidation(memory_bus::CacheType::Data) {
+                self.cache_system.invalidate_dcache();
+                self.cache_coherency.mark_synchronized(memory_bus::CacheType::Data);
+            }
             return self.xmem.ram_load(offset);
         }
 
@@ -568,6 +753,31 @@ impl Psx {
     /// Decode `address` and perform the store to the target module
     fn store<T: Addressable>(&mut self, address: u32, val: T) {
         let abs_addr = map::mask_region(address);
+
+        // Apply memory mirroring
+        let physical_addr = self.memory_bus.apply_mirroring(abs_addr);
+
+        // Submit memory request to unified bus
+        self.memory_bus.request_access(
+            memory_bus::BusComponent::Cpu,
+            physical_addr,
+            memory_bus::AccessType::Write,
+            T::width(),
+            memory_bus::BusPriority::CpuData,
+            self.cycle_counter,
+            Some(val.as_u32()),
+        );
+
+        // Invalidate caches on write
+        self.cache_coherency.invalidate_on_write(physical_addr, memory_bus::BusComponent::Cpu);
+
+        // Get access latency
+        let latency = self.memory_bus.get_access_latency(
+            physical_addr,
+            T::width(),
+            memory_bus::BusComponent::Cpu,
+        );
+        self.tick(latency);
 
         if let Some(offset) = map::RAM.contains(abs_addr) {
             self.xmem.ram_store(offset, val);
