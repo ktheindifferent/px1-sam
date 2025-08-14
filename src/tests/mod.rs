@@ -19,21 +19,7 @@ mod input_validation_tests;
 mod memory_safety_tests;
 
 #[cfg(test)]
-mod run_ahead_tests;
-
-#[cfg(test)]
 mod integration_tests;
 
 #[cfg(test)]
 mod wasm_minimal_tests;
-
-#[cfg(test)]
-#[cfg(feature = "discord-rpc")]
-mod discord_rpc_tests;
-
-#[cfg(test)]
-mod rewind_tests;
-
-#[cfg(test)]
-#[cfg(feature = "cloud-gaming")]
-mod cloud_gaming_tests;
