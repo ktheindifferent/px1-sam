@@ -31,6 +31,10 @@ mod bitwise;
 #[path = "box_array.rs"]
 mod box_array;
 
+// Include test modules when testing
+#[cfg(test)]
+mod tests;
+
 // Performance dashboard module (commented out - module not yet implemented)
 // pub mod performance_dashboard;
 
